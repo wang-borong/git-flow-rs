@@ -1,7 +1,9 @@
 
 use std::path::Path;
-use std::env;
-use git2::{Repository, Error, Config, Oid};
+use git2::{Repository, Error, Config, Oid, BranchType};
+extern crate clap;
+use clap::{Arg, App, SubCommand};
+
 
 fn create_initial_commit(repo: &Repository) -> Result<(), Error> {
     // First use the config to initialize a commit signature for the user.
@@ -30,9 +32,23 @@ fn create_initial_commit(repo: &Repository) -> Result<(), Error> {
     Ok(())
 }
 
-fn create_checkout_branch(repo: &Repository, br_name: &str, oid_str: Option<&str>) -> Result<(), Error> {
+fn checkout_branch(repo: &Repository, br_name: &str) -> Result<(), Error> {
+    let refs_tree = &("refs/heads/".to_owned() + br_name);
+    let obj = repo.revparse_single(&refs_tree)?;
+    repo.checkout_tree(&obj, None)?;
+    repo.set_head(&refs_tree)?;
+
+    Ok(())
+}
+
+fn create_checkout_branch(repo: &Repository, br_name: &str, base_br: Option<&str>, oid_str: Option<&str>) -> Result<(), Error> {
     let oid: Oid;
     if oid_str == None {
+        if base_br != None {
+            let base_br_ref = &("refs/heads/".to_owned() + base_br.unwrap());
+            // set head to the base branch
+            repo.set_head(base_br_ref)?;
+        }
         let head = repo.head()?;
         oid = head.target().unwrap();
     } else {
@@ -40,11 +56,28 @@ fn create_checkout_branch(repo: &Repository, br_name: &str, oid_str: Option<&str
     }
     let commit = repo.find_commit(oid)?;
     repo.branch(br_name, &commit, false)?;
-    let mut refs_tree = String::from("refs/heads/");
-    refs_tree.push_str(br_name);
-    let obj = repo.revparse_single(&refs_tree)?;
-    repo.checkout_tree(&obj, None)?;
-    repo.set_head(&refs_tree)?;
+
+    checkout_branch(&repo, br_name)?;
+
+    Ok(())
+}
+
+fn merge_2branches(repo: &Repository, our_br: &str, their_br: &str) -> Result<(), Error> {
+    let their_oid = repo.refname_to_id(&("refs/heads/".to_owned() + their_br))?;
+    let their_commit = repo.find_annotated_commit(their_oid)?;
+
+    checkout_branch(&repo, our_br)?;
+    repo.merge(&[&their_commit], None, None)?;
+
+    // add and commit
+    //repo.cleanup_state()?;
+
+    Ok(())
+}
+
+fn find_delete_branch(repo: &Repository, br_name: &str) -> Result<(), Error> {
+    let mut branch = repo.find_branch(&br_name, BranchType::Local)?;
+    branch.delete()?;
 
     Ok(())
 }
@@ -57,30 +90,115 @@ fn gf_init<P: AsRef<Path>>(path: P) -> Result<(), Error> {
     create_initial_commit(&repo)?;
     config_l.set_str("gitflow.branch.master", "master")?;
 
-    // git checkout -b develop
-    create_checkout_branch(&repo, "develop", None)?;
+    // git checkout -b develop master
+    create_checkout_branch(&repo, "develop", Some("master"), None)?;
     config_l.set_str("gitflow.branch.develop", "develop")?;
 
-    config_l.set_str("gitflow.prefix.feature", "feature")?;
-    config_l.set_str("gitflow.prefix.release", "release")?;
-    config_l.set_str("gitflow.prefix.hotfix", "hotfix")?;
-    config_l.set_str("gitflow.prefix.support", "support")?;
+    config_l.set_str("gitflow.prefix.feature", "feature/")?;
+    config_l.set_str("gitflow.prefix.release", "release/")?;
+    config_l.set_str("gitflow.prefix.hotfix", "hotfix/")?;
+    config_l.set_str("gitflow.prefix.support", "support/")?;
     config_l.set_str("gitflow.prefix.versiontag", "")?;
 
     Ok(())
 }
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    let path = Path::new(&args[1]);
+fn gf_subcmd(cmd: &str, subcmd: &str, br: &str, base_br: &str) -> Result<(), Error> {
+    let repo = Repository::open(".")?;
+    let config_l = repo.config()?;
 
-    let config_g = match Config::open_default() {
-        Ok(config_g) => config_g,
-        Err(e) => panic!("{}", e)
-    };
+    let prefix_conf = &("gitflow.prefix.".to_owned() + cmd);
+    let prefix = config_l.get_string(prefix_conf)?;
+    let br_name = &(prefix + br);
+    println!("br_name: {}", br_name);
 
-    match gf_init(&path) {
-        Ok(()) => println!("run gf_init success"),
-        Err(e) => panic!("{}", e),
+    match subcmd {
+        "start" => create_checkout_branch(&repo, &br_name, Some(&base_br), None)?,
+        _ => println!("Not implement {} for {}", subcmd, cmd),
     }
+
+
+    Ok(())
+}
+
+fn gf_run() {
+    let matches = App::new("git-flow")
+        .version("0.1")
+        .author("Jason Wang <wang_borong@163.com>")
+        .about("git flow")
+        // Init subcommand
+        .subcommand(SubCommand::with_name("init")
+            .about("git flow init")
+            .arg(Arg::with_name("init_path")
+                .help("path to be initialized")))
+        // Feature subcommand
+        .subcommand(SubCommand::with_name("feature")
+            .about("git flow feature")
+            .subcommand(SubCommand::with_name("start")
+                .about("feature start command")
+                .arg(Arg::with_name("feature_name")
+                    .help("work on a feature branch")
+                    .required(true)
+                    .index(1)))
+            .subcommand(SubCommand::with_name("finish")
+                .about("feature finish command")
+                .arg(Arg::with_name("feature_name")
+                    .help("work off a feature branch")))
+            )
+        // Release subcommand
+        .subcommand(SubCommand::with_name("release")
+            .about("git flow release")
+            .subcommand(SubCommand::with_name("start")
+                .about("release start command")
+                .arg(Arg::with_name("release_name")
+                    .help("work on a release branch")
+                    .required(true)
+                    .index(1)))
+            .subcommand(SubCommand::with_name("finish")
+                .about("release finish command")
+                .arg(Arg::with_name("release_name")
+                    .help("work off a release branch")))
+            )
+        // ...
+        .get_matches();
+
+    if let Some(matches) = matches.subcommand_matches("init") {
+        let path: &str;
+        if matches.is_present("init_path") {
+            path = matches.value_of("init_path").unwrap();
+        } else {
+            path = ".";
+        }
+        match gf_init(&path) {
+            Ok(()) => println!("Init {} Successfully", path),
+            Err(e) => panic!("Init {} Failed ({})", path, e),
+        }
+    }
+
+    if let Some(match_sub0) = matches.subcommand_matches("feature") {
+        if let Some(match_sub1) = match_sub0.subcommand_matches("start") {
+            let br = match_sub1.value_of("feature_name").unwrap();
+            match gf_subcmd("feature", "start", br, "develop") {
+                Ok(()) => println!("run feature {} ", br),
+                Err(e) => panic!("run subcmd feature failed {}", e),
+            }
+        }
+        if let Some(match_sub1) = match_sub0.subcommand_matches("finish") {
+            println!("{:?}", match_sub1);
+        }
+    }
+}
+
+fn main() {
+
+    gf_run();
+
+    //let repo = Repository::open(".").unwrap();
+
+    //match
+    //merge_2branches(&repo, "develop", "test")
+    //{
+    //    Ok(()) => println!("success"),
+    //    Err(e) => panic!("{}", e),
+    //}
 }
