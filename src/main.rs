@@ -1,6 +1,5 @@
-
 use std::path::Path;
-use git2::{Repository, Error, Config, Oid, BranchType};
+use git2::{Repository, Error, Config, Oid, BranchType, ObjectType, Commit};
 extern crate clap;
 use clap::{Arg, App, SubCommand};
 
@@ -62,20 +61,26 @@ fn create_checkout_branch(repo: &Repository, br_name: &str, base_br: Option<&str
     Ok(())
 }
 
-fn merge_2branches(repo: &Repository, our_br: &str, their_br: &str) -> Result<(), Error> {
+fn find_last_commit(repo: &Repository) -> Result<Commit, Error> {
+    let obj = repo.head()?.resolve()?.peel(ObjectType::Commit)?;
+    obj.into_commit().map_err(|_| Error::from_str("Couldn't find commit"))
+}
+
+fn merge_branch(repo: &Repository, our_br: &str, their_br: &str) -> Result<(), Error> {
     let their_oid = repo.refname_to_id(&("refs/heads/".to_owned() + their_br))?;
-    let their_commit = repo.find_annotated_commit(their_oid)?;
+    let their_annotated_commit = repo.find_annotated_commit(their_oid)?;
 
     checkout_branch(&repo, our_br)?;
-    repo.merge(&[&their_commit], None, None)?;
+    repo.merge(&[&their_annotated_commit], None, None)?;
 
-    // add and commit
+    //git_commit
+
     //repo.cleanup_state()?;
 
     Ok(())
 }
 
-fn find_delete_branch(repo: &Repository, br_name: &str) -> Result<(), Error> {
+fn delete_branch(repo: &Repository, br_name: &str) -> Result<(), Error> {
     let mut branch = repo.find_branch(&br_name, BranchType::Local)?;
     branch.delete()?;
 
@@ -110,13 +115,12 @@ fn gf_subcmd(cmd: &str, subcmd: &str, br: &str, base_br: &str) -> Result<(), Err
     let prefix_conf = &("gitflow.prefix.".to_owned() + cmd);
     let prefix = config_l.get_string(prefix_conf)?;
     let br_name = &(prefix + br);
-    println!("br_name: {}", br_name);
+    //println!("br_name: {}", br_name);
 
     match subcmd {
         "start" => create_checkout_branch(&repo, &br_name, Some(&base_br), None)?,
         _ => println!("Not implement {} for {}", subcmd, cmd),
     }
-
 
     Ok(())
 }
@@ -179,8 +183,8 @@ fn gf_run() {
         if let Some(match_sub1) = match_sub0.subcommand_matches("start") {
             let br = match_sub1.value_of("feature_name").unwrap();
             match gf_subcmd("feature", "start", br, "develop") {
-                Ok(()) => println!("run feature {} ", br),
-                Err(e) => panic!("run subcmd feature failed {}", e),
+                Ok(()) => println!("Run feature {} successfully", br),
+                Err(e) => panic!("Run subcmd feature failed {}", e),
             }
         }
         if let Some(match_sub1) = match_sub0.subcommand_matches("finish") {
@@ -191,14 +195,16 @@ fn gf_run() {
 
 fn main() {
 
-    gf_run();
+    //gf_run();
 
-    //let repo = Repository::open(".").unwrap();
+    let repo = Repository::open(".").unwrap();
 
-    //match
-    //merge_2branches(&repo, "develop", "test")
-    //{
-    //    Ok(()) => println!("success"),
-    //    Err(e) => panic!("{}", e),
-    //}
+    match
+    merge_branch(&repo, "develop", "feature/f1")
+    {
+        Ok(()) => println!("success"),
+        Err(e) => panic!("{}", e),
+    }
+    //let repo = Repository::init(".").unwrap();
+    //create_initial_commit(&repo);
 }
