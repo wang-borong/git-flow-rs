@@ -1,5 +1,5 @@
 use std::path::Path;
-use git2::{Repository, Error, Config, Oid, BranchType, ObjectType, Commit};
+use git2::*;
 extern crate clap;
 use clap::{Arg, App, SubCommand};
 
@@ -66,17 +66,44 @@ fn find_last_commit(repo: &Repository) -> Result<Commit, Error> {
     obj.into_commit().map_err(|_| Error::from_str("Couldn't find commit"))
 }
 
-fn merge_branch(repo: &Repository, our_br: &str, their_br: &str) -> Result<(), Error> {
+fn fastforward_merge_branch(repo: &Repository, our_br: &str, their_br: &str) -> Result<(), Error> {
+    let their_oid = repo.refname_to_id(&("refs/heads/".to_owned() + their_br))?;
+    let our_refname = &("refs/heads/".to_owned() + our_br);
+    let mut our_ref = repo.find_reference(our_refname)?;
+    checkout_branch(&repo, our_br)?;
+
+    our_ref.set_target(their_oid, "merging")?;
+
+    Ok(())
+}
+
+fn normal_merge_branch(repo: &Repository, our_br: &str, their_br: &str) -> Result<(), Error> {
     let their_oid = repo.refname_to_id(&("refs/heads/".to_owned() + their_br))?;
     let their_annotated_commit = repo.find_annotated_commit(their_oid)?;
 
     checkout_branch(&repo, our_br)?;
     repo.merge(&[&their_annotated_commit], None, None)?;
 
-    //git_commit
+    Ok(())
+}
 
-    //repo.cleanup_state()?;
+fn merge_branch(repo: &Repository, our_br: &str, their_br: &str) -> Result<(), Error> {
+    let their_oid = repo.refname_to_id(&("refs/heads/".to_owned() + their_br))?;
+    let their_annotated_commit = repo.find_annotated_commit(their_oid)?;
 
+    let (merge_analysis, merge_pref) = repo.merge_analysis(&[&their_annotated_commit])?;
+
+    match merge_analysis {
+        MergeAnalysis::ANALYSIS_UP_TO_DATE => println!("Already up-to-date"),
+        MergeAnalysis::ANALYSIS_UNBORN => fastforward_merge_branch(&repo, our_br, their_br)?,
+        MergeAnalysis::ANALYSIS_FASTFORWARD => fastforward_merge_branch(&repo, our_br, their_br)?,
+        MergeAnalysis::ANALYSIS_NORMAL => normal_merge_branch(&repo, our_br, their_br)?,
+        _ => println!("Unimplemented"),
+    }
+
+    //git commit
+
+    repo.cleanup_state()?;
     Ok(())
 }
 
@@ -195,12 +222,13 @@ fn gf_run() {
 
 fn main() {
 
-    //gf_run();
+    gf_run();
 
     let repo = Repository::open(".").unwrap();
 
     match
-    merge_branch(&repo, "develop", "feature/f1")
+    fastforward_merge_branch(&repo, "develop", "feature/f1")
+    //merge_branch(&repo, "develop", "feature/f1")
     {
         Ok(()) => println!("success"),
         Err(e) => panic!("{}", e),
