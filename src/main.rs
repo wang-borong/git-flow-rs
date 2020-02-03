@@ -235,6 +235,14 @@ fn gf_subcmd(cmd: &str, subcmd: &str, base_br: &str, br: &str) -> Result<(), Err
     Ok(())
 }
 
+fn list_gf_branch(gf_br: &str) {
+    let paths = Path::read_dir(Path::new(&(".git/refs/heads/".to_owned() + gf_br))).unwrap();
+
+    for path in paths {
+        println!("* {}", path.unwrap().file_name().to_str().unwrap());
+    }
+}
+
 fn gf_run() {
     let matches = App::new("git-flow")
         .version("0.1")
@@ -260,6 +268,8 @@ fn gf_run() {
                     .help("work off a feature branch")
                     .required(true)
                     .index(1)))
+            .subcommand(SubCommand::with_name("list")
+                .about("feature list command"))
         )
         // Release subcommand
         .subcommand(SubCommand::with_name("release")
@@ -326,6 +336,9 @@ fn gf_run() {
                 Err(e) => panic!("Run subcmd feature failed {}", e),
             }
         }
+        if let Some(_) = match_sub0.subcommand_matches("list") {
+            list_gf_branch("feature");
+        }
     }
 
     // Release
@@ -344,6 +357,9 @@ fn gf_run() {
                 Err(e) => panic!("Run subcmd release failed {}", e),
             }
         }
+        if let Some(_) = match_sub0.subcommand_matches("list") {
+            list_gf_branch("release");
+        }
     }
 
     // Hotfix
@@ -361,6 +377,9 @@ fn gf_run() {
                 Ok(()) => println!("Run hotfix {} successfully", br),
                 Err(e) => panic!("Run subcmd hotfix failed {}", e),
             }
+        }
+        if let Some(_) = match_sub0.subcommand_matches("list") {
+            list_gf_branch("hotfix");
         }
     }
 }
