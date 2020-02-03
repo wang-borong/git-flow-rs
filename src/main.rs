@@ -108,9 +108,24 @@ fn normal_merge_branch(repo: &Repository, our_br: &str, their_br: &str, message:
 }
 
 fn merge_branch(repo: &Repository, our_br: &str, their_br: &str, ff: bool, message: Option<&str>) -> Result<(), Error> {
-    let their_oid = repo.refname_to_id(&("refs/heads/".to_owned() + their_br))?;
-    let their_annotated_commit = repo.find_annotated_commit(their_oid)?;
+    //let our_oid = repo.refname_to_id(&("refs/heads/".to_owned() + our_br))?;
+    //let our_annotated_commit = repo.find_annotated_commit(our_oid)?;
+    //let their_oid = repo.refname_to_id(&("refs/heads/".to_owned() + their_br))?;
+    //let their_annotated_commit = repo.find_annotated_commit(their_oid)?;
 
+    if ff {
+        fastforward_merge_branch(&repo, our_br, their_br)?;
+    } else {
+        if message != None {
+            normal_merge_branch(&repo, our_br, their_br, message.unwrap())?;
+        } else {
+            println!("No merge message");
+        }
+    }
+
+    //checkout_branch(&repo, our_br)?;
+
+/*
     let (merge_analysis, _) = repo.merge_analysis(&[&their_annotated_commit])?;
 
     match merge_analysis {
@@ -127,6 +142,7 @@ fn merge_branch(repo: &Repository, our_br: &str, their_br: &str, ff: bool, messa
         }
         _ => println!("Unimplemented"),
     }
+*/
 
     Ok(())
 }
@@ -159,17 +175,21 @@ fn gf_init<P: AsRef<Path>>(path: P) -> Result<(), Error> {
     Ok(())
 }
 
-fn gf_subcmd(cmd: &str, subcmd: &str, br: &str, base_br: &str) -> Result<(), Error> {
+fn gf_subcmd(cmd: &str, subcmd: &str, base_br: &str, br: &str, message: Option<&str>) -> Result<(), Error> {
     let repo = Repository::open(".")?;
     let config_l = repo.config()?;
 
     let prefix_conf = &("gitflow.prefix.".to_owned() + cmd);
     let prefix = config_l.get_string(prefix_conf)?;
     let br_name = &(prefix + br);
-    //println!("br_name: {}", br_name);
 
+    let mut ff = true;
     match subcmd {
         "start" => create_checkout_branch(&repo, &br_name, Some(&base_br), None)?,
+        "finish" => {
+            if base_br == "master" { ff = false; }
+            merge_branch(&repo, base_br, br_name, ff, Some("message"))?;
+        }
         _ => println!("Not implement {} for {}", subcmd, cmd),
     }
 
@@ -198,8 +218,10 @@ fn gf_run() {
             .subcommand(SubCommand::with_name("finish")
                 .about("feature finish command")
                 .arg(Arg::with_name("feature_name")
-                    .help("work off a feature branch")))
-            )
+                    .help("work off a feature branch")
+                    .required(true)
+                    .index(1)))
+        )
         // Release subcommand
         .subcommand(SubCommand::with_name("release")
             .about("git flow release")
@@ -212,7 +234,9 @@ fn gf_run() {
             .subcommand(SubCommand::with_name("finish")
                 .about("release finish command")
                 .arg(Arg::with_name("release_name")
-                    .help("work off a release branch")))
+                    .help("work off a release branch")
+                    .required(true)
+                    .index(1)))
             )
         // ...
         .get_matches();
@@ -233,13 +257,17 @@ fn gf_run() {
     if let Some(match_sub0) = matches.subcommand_matches("feature") {
         if let Some(match_sub1) = match_sub0.subcommand_matches("start") {
             let br = match_sub1.value_of("feature_name").unwrap();
-            match gf_subcmd("feature", "start", br, "develop") {
+            match gf_subcmd("feature", "start", "develop", br, None) {
                 Ok(()) => println!("Run feature {} successfully", br),
                 Err(e) => panic!("Run subcmd feature failed {}", e),
             }
         }
         if let Some(match_sub1) = match_sub0.subcommand_matches("finish") {
-            println!("{:?}", match_sub1);
+            let br = match_sub1.value_of("feature_name").unwrap();
+            match gf_subcmd("feature", "finish", "develop", br, None) {
+                Ok(()) => println!("Run feature {} successfully", br),
+                Err(e) => panic!("Run subcmd feature failed {}", e),
+            }
         }
     }
 }
@@ -248,6 +276,7 @@ fn main() {
 
     gf_run();
 
+    /*
     let repo = Repository::open(".").unwrap();
 
     match
@@ -260,4 +289,5 @@ fn main() {
     }
     //let repo = Repository::init(".").unwrap();
     //create_initial_commit(&repo);
+    */
 }
