@@ -247,7 +247,7 @@ fn list_gf_branch(gf_br: &str) {
 
 fn gf_run() {
     let matches = App::new("git-flow")
-        .version("0.1")
+        .version("0.2.0")
         .author("Jason Wang <wang_borong@163.com>")
         .about("git flow")
         // Init subcommand
