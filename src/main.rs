@@ -3,7 +3,6 @@ use git2::*;
 extern crate clap;
 use clap::{Arg, App, SubCommand};
 
-
 fn create_initial_commit(repo: &Repository) -> Result<(), Error> {
     // First use the config to initialize a commit signature for the user.
     let sig = repo.signature()?;
@@ -70,40 +69,65 @@ fn fastforward_merge_branch(repo: &Repository, our_br: &str, their_br: &str) -> 
     let their_oid = repo.refname_to_id(&("refs/heads/".to_owned() + their_br))?;
     let our_refname = &("refs/heads/".to_owned() + our_br);
     let mut our_ref = repo.find_reference(our_refname)?;
-    checkout_branch(&repo, our_br)?;
 
-    our_ref.set_target(their_oid, "merging")?;
+    our_ref.set_target(their_oid, "fastforward merging")?;
+
+    // check it out after set_target
+    //checkout_branch(&repo, our_br)?;
 
     Ok(())
 }
 
-fn normal_merge_branch(repo: &Repository, our_br: &str, their_br: &str) -> Result<(), Error> {
+fn normal_merge_branch(repo: &Repository, our_br: &str, their_br: &str, message: &str) -> Result<(), Error> {
     let their_oid = repo.refname_to_id(&("refs/heads/".to_owned() + their_br))?;
+    let their_commit = repo.find_commit(their_oid)?;
     let their_annotated_commit = repo.find_annotated_commit(their_oid)?;
-
+    //println!("their_commit {:?}", their_commit);
+    
     checkout_branch(&repo, our_br)?;
     repo.merge(&[&their_annotated_commit], None, None)?;
+    let parent = find_last_commit(&repo)?;
+    //println!("parent {:?}", parent);
+
+    //git commit
+    let sig = repo.signature()?;
+    let tree_id = {
+        let mut index = repo.index()?;
+
+        index.write_tree()?
+    };
+
+    let tree = repo.find_tree(tree_id)?;
+
+    repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent, &their_commit])?;
+
+    // reslove conflicts and merging
+    repo.cleanup_state()?;
 
     Ok(())
 }
 
-fn merge_branch(repo: &Repository, our_br: &str, their_br: &str) -> Result<(), Error> {
+fn merge_branch(repo: &Repository, our_br: &str, their_br: &str, ff: bool, message: Option<&str>) -> Result<(), Error> {
     let their_oid = repo.refname_to_id(&("refs/heads/".to_owned() + their_br))?;
     let their_annotated_commit = repo.find_annotated_commit(their_oid)?;
 
-    let (merge_analysis, merge_pref) = repo.merge_analysis(&[&their_annotated_commit])?;
+    let (merge_analysis, _) = repo.merge_analysis(&[&their_annotated_commit])?;
 
     match merge_analysis {
         MergeAnalysis::ANALYSIS_UP_TO_DATE => println!("Already up-to-date"),
-        MergeAnalysis::ANALYSIS_UNBORN => fastforward_merge_branch(&repo, our_br, their_br)?,
-        MergeAnalysis::ANALYSIS_FASTFORWARD => fastforward_merge_branch(&repo, our_br, their_br)?,
-        MergeAnalysis::ANALYSIS_NORMAL => normal_merge_branch(&repo, our_br, their_br)?,
+        MergeAnalysis::ANALYSIS_UNBORN | MergeAnalysis::ANALYSIS_FASTFORWARD |
+        MergeAnalysis::ANALYSIS_NORMAL => if ff {
+            fastforward_merge_branch(&repo, our_br, their_br)?;
+        } else {
+            if message != None {
+                normal_merge_branch(&repo, our_br, their_br, message.unwrap())?;
+            } else {
+                println!("No merge message");
+            }
+        }
         _ => println!("Unimplemented"),
     }
 
-    //git commit
-
-    repo.cleanup_state()?;
     Ok(())
 }
 
@@ -227,10 +251,11 @@ fn main() {
     let repo = Repository::open(".").unwrap();
 
     match
-    fastforward_merge_branch(&repo, "develop", "feature/f1")
-    //merge_branch(&repo, "develop", "feature/f1")
+    //fastforward_merge_branch(&repo, "develop", "feature/f1")
+    normal_merge_branch(&repo, "master", "develop", "merge develop test")
+    //merge_branch(&repo, "master", "develop", false, Some("Merge develop"))
     {
-        Ok(()) => println!("success"),
+        Ok(()) => println!("test success"),
         Err(e) => panic!("{}", e),
     }
     //let repo = Repository::init(".").unwrap();
