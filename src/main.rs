@@ -1,6 +1,11 @@
-use std::path::Path;
-use git2::*;
 extern crate clap;
+
+use std::path::Path;
+use std::process::Command;
+use std::fs::File;
+use std::io::{self, Read, Write};
+use std::env;
+use git2::*;
 use clap::{Arg, App, SubCommand};
 
 fn create_initial_commit(repo: &Repository) -> Result<(), Error> {
@@ -78,12 +83,12 @@ fn fastforward_merge_branch(repo: &Repository, our_br: &str, their_br: &str) -> 
     Ok(())
 }
 
-fn normal_merge_branch(repo: &Repository, our_br: &str, their_br: &str, message: &str) -> Result<(), Error> {
+fn normal_merge_branch(repo: &Repository, our_br: &str, their_br: &str) -> Result<(), Error> {
     let their_oid = repo.refname_to_id(&("refs/heads/".to_owned() + their_br))?;
     let their_commit = repo.find_commit(their_oid)?;
     let their_annotated_commit = repo.find_annotated_commit(their_oid)?;
     //println!("their_commit {:?}", their_commit);
-    
+
     checkout_branch(&repo, our_br)?;
     repo.merge(&[&their_annotated_commit], None, None)?;
     let parent = find_last_commit(&repo)?;
@@ -99,7 +104,19 @@ fn normal_merge_branch(repo: &Repository, our_br: &str, their_br: &str, message:
 
     let tree = repo.find_tree(tree_id)?;
 
-    repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent, &their_commit])?;
+    let editor = env::var("EDITOR").unwrap_or("nvim".into());
+    Command::new(editor)
+        .arg(".git/COMMIT_EDITMSG")
+        .spawn()
+        .expect("Spawn nvim failed")
+        .wait()
+        .expect("Waiting nvim failed");
+
+    let mut msg = String::new();
+    let mut f = File::open(".git/COMMIT_EDITMSG").expect("Unable to open file");
+    f.read_to_string(&mut msg).expect("Unable to read string");
+
+    repo.commit(Some("HEAD"), &sig, &sig, &msg, &tree, &[&parent, &their_commit])?;
 
     // reslove conflicts and merging
     repo.cleanup_state()?;
@@ -107,7 +124,7 @@ fn normal_merge_branch(repo: &Repository, our_br: &str, their_br: &str, message:
     Ok(())
 }
 
-fn merge_branch(repo: &Repository, our_br: &str, their_br: &str, ff: bool, message: Option<&str>) -> Result<(), Error> {
+fn merge_branch(repo: &Repository, our_br: &str, their_br: &str, ff: bool) -> Result<(), Error> {
     //let our_oid = repo.refname_to_id(&("refs/heads/".to_owned() + our_br))?;
     //let our_annotated_commit = repo.find_annotated_commit(our_oid)?;
     //let their_oid = repo.refname_to_id(&("refs/heads/".to_owned() + their_br))?;
@@ -116,11 +133,7 @@ fn merge_branch(repo: &Repository, our_br: &str, their_br: &str, ff: bool, messa
     if ff {
         fastforward_merge_branch(&repo, our_br, their_br)?;
     } else {
-        if message != None {
-            normal_merge_branch(&repo, our_br, their_br, message.unwrap())?;
-        } else {
-            println!("No merge message");
-        }
+        normal_merge_branch(&repo, our_br, their_br)?;
     }
 
     //checkout_branch(&repo, our_br)?;
@@ -135,7 +148,7 @@ fn merge_branch(repo: &Repository, our_br: &str, their_br: &str, ff: bool, messa
             fastforward_merge_branch(&repo, our_br, their_br)?;
         } else {
             if message != None {
-                normal_merge_branch(&repo, our_br, their_br, message.unwrap())?;
+                normal_merge_branch(&repo, our_br, their_br)?;
             } else {
                 println!("No merge message");
             }
@@ -175,7 +188,47 @@ fn gf_init<P: AsRef<Path>>(path: P) -> Result<(), Error> {
     Ok(())
 }
 
-fn gf_subcmd(cmd: &str, subcmd: &str, base_br: &str, br: &str, message: Option<&str>) -> Result<(), Error> {
+fn get_input(prompt: &str) -> String {
+    print!("{}: ", prompt);
+    io::stdout().flush().unwrap();
+    let mut input = String::new();
+    match io::stdin().read_line(&mut input) {
+        Ok(_goes_into_input_above) => {},
+        Err(_no_updates_is_fine) => {},
+    }
+    input.trim().to_string()
+}
+
+fn create_tag(repo: &Repository, br: &str) -> Result<Oid, Error> {
+    let br_oid = repo.refname_to_id(&("refs/heads/".to_owned() + br))?;
+    let br_obj = repo.find_object(br_oid, None)?;
+
+    // get a user input tag
+    let tagname = get_input("Input a tag name");
+
+    let editor = env::var("EDITOR").unwrap_or("nvim".into());
+    Command::new(editor)
+        .arg(".git/TAG_EDITMSG")
+        .spawn()
+        .expect("Spawn nvim failed")
+        .wait()
+        .expect("Waiting nvim failed");
+
+    let mut msg = String::new();
+    let mut f = File::open(".git/TAG_EDITMSG").expect("Unable to open file");
+    f.read_to_string(&mut msg).expect("Unable to read string");
+
+    let sig = repo.signature()?;
+    let tag_oid = repo.tag(&tagname,
+        &br_obj,
+        &sig,
+        &msg,
+        true)?;
+
+    Ok(tag_oid)
+}
+
+fn gf_subcmd(cmd: &str, subcmd: &str, base_br: &str, br: &str) -> Result<(), Error> {
     let repo = Repository::open(".")?;
     let config_l = repo.config()?;
 
@@ -187,8 +240,16 @@ fn gf_subcmd(cmd: &str, subcmd: &str, base_br: &str, br: &str, message: Option<&
     match subcmd {
         "start" => create_checkout_branch(&repo, &br_name, Some(&base_br), None)?,
         "finish" => {
-            if base_br == "master" { ff = false; }
-            merge_branch(&repo, base_br, br_name, ff, Some("message"))?;
+            if cmd == "release" {
+                ff = false;
+                merge_branch(&repo, "master", br_name, ff)?;
+                let _tag_oid = create_tag(&repo, "master")?;
+                //merge_tag(&repo, base_br, tag_oid)?;
+                merge_branch(&repo, base_br, "master", ff)?;
+            } else {
+                merge_branch(&repo, base_br, br_name, ff)?;
+            }
+            //delete_branch(&repo, br_name)?;
         }
         _ => println!("Not implement {} for {}", subcmd, cmd),
     }
@@ -257,16 +318,33 @@ fn gf_run() {
     if let Some(match_sub0) = matches.subcommand_matches("feature") {
         if let Some(match_sub1) = match_sub0.subcommand_matches("start") {
             let br = match_sub1.value_of("feature_name").unwrap();
-            match gf_subcmd("feature", "start", "develop", br, None) {
+            match gf_subcmd("feature", "start", "develop", br) {
                 Ok(()) => println!("Run feature {} successfully", br),
                 Err(e) => panic!("Run subcmd feature failed {}", e),
             }
         }
         if let Some(match_sub1) = match_sub0.subcommand_matches("finish") {
             let br = match_sub1.value_of("feature_name").unwrap();
-            match gf_subcmd("feature", "finish", "develop", br, None) {
+            match gf_subcmd("feature", "finish", "develop", br) {
                 Ok(()) => println!("Run feature {} successfully", br),
                 Err(e) => panic!("Run subcmd feature failed {}", e),
+            }
+        }
+    }
+
+    if let Some(match_sub0) = matches.subcommand_matches("release") {
+        if let Some(match_sub1) = match_sub0.subcommand_matches("start") {
+            let br = match_sub1.value_of("release_name").unwrap();
+            match gf_subcmd("release", "start", "develop", br) {
+                Ok(()) => println!("Run release {} successfully", br),
+                Err(e) => panic!("Run subcmd release failed {}", e),
+            }
+        }
+        if let Some(match_sub1) = match_sub0.subcommand_matches("finish") {
+            let br = match_sub1.value_of("release_name").unwrap();
+            match gf_subcmd("release", "finish", "develop", br) {
+                Ok(()) => println!("Run release {} successfully", br),
+                Err(e) => panic!("Run subcmd release failed {}", e),
             }
         }
     }
@@ -282,7 +360,7 @@ fn main() {
     match
     //fastforward_merge_branch(&repo, "develop", "feature/f1")
     normal_merge_branch(&repo, "master", "develop", "merge develop test")
-    //merge_branch(&repo, "master", "develop", false, Some("Merge develop"))
+    //merge_branch(&repo, "master", "develop", false)
     {
         Ok(()) => println!("test success"),
         Err(e) => panic!("{}", e),
