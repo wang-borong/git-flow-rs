@@ -238,10 +238,21 @@ fn gf_subcmd(cmd: &str, subcmd: &str, base_br: &str, br: &str) -> Result<(), Err
 }
 
 fn list_gf_branch(gf_br: &str) {
-    let paths = Path::read_dir(Path::new(&(".git/refs/heads/".to_owned() + gf_br))).unwrap();
+    let paths = Path::read_dir(Path::new(&(".git/refs/heads/".to_owned() + gf_br))).expect("No branches exist.");
+
+    let mut cur_br = String::new();
+    let mut f = File::open(".git/HEAD").expect("Unable to open file");
+    f.read_to_string(&mut cur_br).expect("Unable to read string");
+    cur_br = cur_br.replace(&("ref: refs/heads/".to_owned() + gf_br + "/"), "");
 
     for path in paths {
-        println!("* {}", path.unwrap().file_name().to_str().unwrap());
+        let file_name = path.unwrap().file_name();
+        let br = file_name.to_str().unwrap();
+        if br == cur_br.trim() {
+            println!("* {}", br);
+        } else {
+            println!("  {}", br);
+        }
     }
 }
 
@@ -288,6 +299,8 @@ fn gf_run() {
                     .help("work off a release branch")
                     .required(true)
                     .index(1)))
+            .subcommand(SubCommand::with_name("list")
+                .about("release list command"))
         )
         // Hotfix subcommand
         .subcommand(SubCommand::with_name("hotfix")
@@ -304,6 +317,8 @@ fn gf_run() {
                     .help("work off a hotfix branch")
                     .required(true)
                     .index(1)))
+            .subcommand(SubCommand::with_name("list")
+                .about("hotfix list command"))
         )
         // ...
         .get_matches();
