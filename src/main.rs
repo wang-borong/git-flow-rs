@@ -2,7 +2,7 @@ extern crate clap;
 
 use std::path::Path;
 use std::process::Command;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::env;
 use git2::*;
@@ -77,9 +77,6 @@ fn fastforward_merge_branch(repo: &Repository, our_br: &str, their_br: &str) -> 
 
     our_ref.set_target(their_oid, "fastforward merging")?;
 
-    // check it out after set_target
-    //checkout_branch(&repo, our_br)?;
-
     Ok(())
 }
 
@@ -87,12 +84,10 @@ fn normal_merge_branch(repo: &Repository, our_br: &str, their_br: &str) -> Resul
     let their_oid = repo.refname_to_id(&("refs/heads/".to_owned() + their_br))?;
     let their_commit = repo.find_commit(their_oid)?;
     let their_annotated_commit = repo.find_annotated_commit(their_oid)?;
-    //println!("their_commit {:?}", their_commit);
 
     checkout_branch(&repo, our_br)?;
     repo.merge(&[&their_annotated_commit], None, None)?;
     let parent = find_last_commit(&repo)?;
-    //println!("parent {:?}", parent);
 
     //git commit
     let sig = repo.signature()?;
@@ -104,17 +99,15 @@ fn normal_merge_branch(repo: &Repository, our_br: &str, their_br: &str) -> Resul
 
     let tree = repo.find_tree(tree_id)?;
 
-    let editor = env::var("EDITOR").unwrap_or("nvim".into());
-    Command::new(editor)
-        .arg(".git/COMMIT_EDITMSG")
-        .spawn()
-        .expect("Spawn nvim failed")
-        .wait()
-        .expect("Waiting nvim failed");
-
-    let mut msg = String::new();
-    let mut f = File::open(".git/COMMIT_EDITMSG").expect("Unable to open file");
-    f.read_to_string(&mut msg).expect("Unable to read string");
+    let merge_msg: String;
+    if our_br == "master" {
+        merge_msg = "Bump to version ".to_owned();
+    } else if our_br == "develop" {
+        merge_msg = "Develop from version ".to_owned();
+    } else {
+        merge_msg = "Merge ".to_owned() + their_br + " to " + our_br;
+    }
+    let msg = edit_msg(".git/COMMIT_EDITMSG", &merge_msg);
 
     repo.commit(Some("HEAD"), &sig, &sig, &msg, &tree, &[&parent, &their_commit])?;
 
@@ -177,6 +170,24 @@ fn get_input(prompt: &str) -> String {
     input.trim().to_string()
 }
 
+fn edit_msg(path: &str, default_msg: &str) -> String {
+    fs::write(path, default_msg).expect("Unable to write string");
+
+    let editor = env::var("EDITOR").unwrap_or("nvim".into());
+    Command::new(editor)
+        .arg(path)
+        .spawn()
+        .expect("Spawn nvim failed")
+        .wait()
+        .expect("Waiting nvim failed");
+
+    let mut msg = String::new();
+    let mut f = File::open(path).expect("Unable to open file");
+    f.read_to_string(&mut msg).expect("Unable to read string");
+
+    msg
+}
+
 fn create_tag(repo: &Repository, br: &str) -> Result<Oid, Error> {
     let br_oid = repo.refname_to_id(&("refs/heads/".to_owned() + br))?;
     let br_obj = repo.find_object(br_oid, None)?;
@@ -184,17 +195,8 @@ fn create_tag(repo: &Repository, br: &str) -> Result<Oid, Error> {
     // get a user input tag
     let tagname = get_input("Input a tag name");
 
-    let editor = env::var("EDITOR").unwrap_or("nvim".into());
-    Command::new(editor)
-        .arg(".git/TAG_EDITMSG")
-        .spawn()
-        .expect("Spawn nvim failed")
-        .wait()
-        .expect("Waiting nvim failed");
-
-    let mut msg = String::new();
-    let mut f = File::open(".git/TAG_EDITMSG").expect("Unable to open file");
-    f.read_to_string(&mut msg).expect("Unable to read string");
+    let tag_msg = &("Release version ".to_owned() + &tagname);
+    let msg = edit_msg(".git/TAG_EDITMSG", tag_msg);
 
     let sig = repo.signature()?;
     let tag_oid = repo.tag(&tagname,
@@ -385,21 +387,5 @@ fn gf_run() {
 }
 
 fn main() {
-
     gf_run();
-
-    /*
-    let repo = Repository::open(".").unwrap();
-
-    match
-    //fastforward_merge_branch(&repo, "develop", "feature/f1")
-    normal_merge_branch(&repo, "master", "develop", "merge develop test")
-    //merge_branch(&repo, "master", "develop", false)
-    {
-        Ok(()) => println!("test success"),
-        Err(e) => panic!("{}", e),
-    }
-    //let repo = Repository::init(".").unwrap();
-    //create_initial_commit(&repo);
-    */
 }
