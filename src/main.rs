@@ -125,10 +125,6 @@ fn normal_merge_branch(repo: &Repository, our_br: &str, their_br: &str) -> Resul
 }
 
 fn merge_branch(repo: &Repository, our_br: &str, their_br: &str, ff: bool) -> Result<(), Error> {
-    //let our_oid = repo.refname_to_id(&("refs/heads/".to_owned() + our_br))?;
-    //let our_annotated_commit = repo.find_annotated_commit(our_oid)?;
-    //let their_oid = repo.refname_to_id(&("refs/heads/".to_owned() + their_br))?;
-    //let their_annotated_commit = repo.find_annotated_commit(their_oid)?;
 
     if ff {
         fastforward_merge_branch(&repo, our_br, their_br)?;
@@ -136,26 +132,8 @@ fn merge_branch(repo: &Repository, our_br: &str, their_br: &str, ff: bool) -> Re
         normal_merge_branch(&repo, our_br, their_br)?;
     }
 
-    //checkout_branch(&repo, our_br)?;
-
-/*
-    let (merge_analysis, _) = repo.merge_analysis(&[&their_annotated_commit])?;
-
-    match merge_analysis {
-        MergeAnalysis::ANALYSIS_UP_TO_DATE => println!("Already up-to-date"),
-        MergeAnalysis::ANALYSIS_UNBORN | MergeAnalysis::ANALYSIS_FASTFORWARD |
-        MergeAnalysis::ANALYSIS_NORMAL => if ff {
-            fastforward_merge_branch(&repo, our_br, their_br)?;
-        } else {
-            if message != None {
-                normal_merge_branch(&repo, our_br, their_br)?;
-            } else {
-                println!("No merge message");
-            }
-        }
-        _ => println!("Unimplemented"),
-    }
-*/
+    // checkout to base branch
+    checkout_branch(&repo, our_br)?;
 
     Ok(())
 }
@@ -240,7 +218,7 @@ fn gf_subcmd(cmd: &str, subcmd: &str, base_br: &str, br: &str) -> Result<(), Err
     match subcmd {
         "start" => create_checkout_branch(&repo, &br_name, Some(&base_br), None)?,
         "finish" => {
-            if cmd == "release" {
+            if cmd == "release" || cmd == "hotfix" {
                 ff = false;
                 merge_branch(&repo, "master", br_name, ff)?;
                 let _tag_oid = create_tag(&repo, "master")?;
@@ -249,7 +227,7 @@ fn gf_subcmd(cmd: &str, subcmd: &str, base_br: &str, br: &str) -> Result<(), Err
             } else {
                 merge_branch(&repo, base_br, br_name, ff)?;
             }
-            //delete_branch(&repo, br_name)?;
+            delete_branch(&repo, br_name)?;
         }
         _ => println!("Not implement {} for {}", subcmd, cmd),
     }
@@ -298,10 +276,27 @@ fn gf_run() {
                     .help("work off a release branch")
                     .required(true)
                     .index(1)))
-            )
+        )
+        // Hotfix subcommand
+        .subcommand(SubCommand::with_name("hotfix")
+            .about("git flow hotfix")
+            .subcommand(SubCommand::with_name("start")
+                .about("hotfix start command")
+                .arg(Arg::with_name("hotfix_name")
+                    .help("work on a hotfix branch")
+                    .required(true)
+                    .index(1)))
+            .subcommand(SubCommand::with_name("finish")
+                .about("hotfix finish command")
+                .arg(Arg::with_name("hotfix_name")
+                    .help("work off a hotfix branch")
+                    .required(true)
+                    .index(1)))
+        )
         // ...
         .get_matches();
 
+    // Init
     if let Some(matches) = matches.subcommand_matches("init") {
         let path: &str;
         if matches.is_present("init_path") {
@@ -315,6 +310,7 @@ fn gf_run() {
         }
     }
 
+    // Feature
     if let Some(match_sub0) = matches.subcommand_matches("feature") {
         if let Some(match_sub1) = match_sub0.subcommand_matches("start") {
             let br = match_sub1.value_of("feature_name").unwrap();
@@ -332,6 +328,7 @@ fn gf_run() {
         }
     }
 
+    // Release
     if let Some(match_sub0) = matches.subcommand_matches("release") {
         if let Some(match_sub1) = match_sub0.subcommand_matches("start") {
             let br = match_sub1.value_of("release_name").unwrap();
@@ -345,6 +342,24 @@ fn gf_run() {
             match gf_subcmd("release", "finish", "develop", br) {
                 Ok(()) => println!("Run release {} successfully", br),
                 Err(e) => panic!("Run subcmd release failed {}", e),
+            }
+        }
+    }
+
+    // Hotfix
+    if let Some(match_sub0) = matches.subcommand_matches("hotfix") {
+        if let Some(match_sub1) = match_sub0.subcommand_matches("start") {
+            let br = match_sub1.value_of("hotfix_name").unwrap();
+            match gf_subcmd("hotfix", "start", "develop", br) {
+                Ok(()) => println!("Run hotfix {} successfully", br),
+                Err(e) => panic!("Run subcmd hotfix failed {}", e),
+            }
+        }
+        if let Some(match_sub1) = match_sub0.subcommand_matches("finish") {
+            let br = match_sub1.value_of("hotfix_name").unwrap();
+            match gf_subcmd("hotfix", "finish", "develop", br) {
+                Ok(()) => println!("Run hotfix {} successfully", br),
+                Err(e) => panic!("Run subcmd hotfix failed {}", e),
             }
         }
     }
