@@ -490,12 +490,7 @@ fn gf_run() {
 
     // Init
     if let Some(matches) = matches.subcommand_matches("init") {
-        let path: &str;
-        if matches.is_present("init_path") {
-            path = matches.value_of("init_path").unwrap();
-        } else {
-            path = ".";
-        }
+        let path = matches.value_of("init_path").unwrap_or(".");
         match gf_init(&path) {
             Ok(()) => println!("Init {} Successfully", path),
             Err(_) => {
@@ -538,14 +533,39 @@ fn gf_run() {
         if let Some(_) = match_sub0.subcommand_matches("list") {
             gf_list_branch("feature");
         }
+        // publish
+        if let Some(match_sub1) = match_sub0.subcommand_matches("publish") {
+            if match_sub1.is_present("feature_name") {
+                let tmp_br = match_sub1.value_of("feature_name").unwrap();
+                gf_publish(Some(&("feature/".to_owned() + tmp_br)));
+            } else {
+                gf_publish(None);
+            }
+        }
+        // track
+        if let Some(match_sub1) = match_sub0.subcommand_matches("diff") {
+            let br_name = match_sub1.value_of("feature_name")
+                .expect("No feature name input");
+            gf_fetch(Some(&("feature/".to_owned() + br_name)));
+        }
         // diff
         if let Some(match_sub1) = match_sub0.subcommand_matches("diff") {
-            let tmp_br: &str;
             if match_sub1.is_present("feature_name") {
-                tmp_br = match_sub1.value_of("feature_name").unwrap();
+                let tmp_br = match_sub1.value_of("feature_name").unwrap();
                 gf_diff_branches("develop", Some(&("feature/".to_owned() + tmp_br)));
             } else {
                 gf_diff_branches("develop", None);
+            }
+        }
+        // rebase
+        if let Some(match_sub1) = match_sub0.subcommand_matches("rebase") {
+            if match_sub1.is_present("interactive") {
+                println!("interactive");
+            } else if match_sub1.is_present("preserve-merges") {
+                println!("preserve-merges");
+            } else {
+                let br_name = match_sub1.value_of("feature_name").unwrap_or("");
+                println!("br_name: {}", br_name);
             }
         }
         // checkout
@@ -561,6 +581,7 @@ fn gf_run() {
                 },
             }
         }
+        //delete
         if let Some(match_sub1) = match_sub0.subcommand_matches("delete") {
             let br = match_sub1.value_of("feature_name").unwrap();
             let br_name = &("feature/".to_owned() + br);
