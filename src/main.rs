@@ -153,10 +153,33 @@ fn gf_init<P: AsRef<Path>>(path: P) -> Result<(), Error> {
     config_l.set_str("gitflow.prefix.feature", "feature/")?;
     config_l.set_str("gitflow.prefix.release", "release/")?;
     config_l.set_str("gitflow.prefix.hotfix", "hotfix/")?;
+    config_l.set_str("gitflow.prefix.bugfix", "bugfix/")?;
     config_l.set_str("gitflow.prefix.support", "support/")?;
     config_l.set_str("gitflow.prefix.versiontag", "")?;
 
     Ok(())
+}
+
+fn gf_config() {
+    let repo = Repository::init(".").expect("Not a git-flow repository");
+    let config_l = repo.config().expect("Can not get local cofniguration");
+
+    let mut cfg = config_l.get_string("gitflow.branch.master").unwrap_or("".to_owned());
+    println!("Branch name for production releases: {}", cfg);
+    cfg = config_l.get_string("gitflow.branch.develop").unwrap_or("".to_owned());
+    println!("Branch name for \"next release\" development: {}", cfg);
+    cfg = config_l.get_string("gitflow.prefix.feature").unwrap_or("".to_owned());
+    println!("Feature branch prefix: {}", cfg);
+    cfg = config_l.get_string("gitflow.prefix.bugfix").unwrap_or("".to_owned());
+    println!("Bugfix branch prefix: {}", cfg);
+    cfg = config_l.get_string("gitflow.prefix.release").unwrap_or("".to_owned());
+    println!("Release branch prefix: {}", cfg);
+    cfg = config_l.get_string("gitflow.prefix.hotfix").unwrap_or("".to_owned());
+    println!("Hotfix branch prefix: {}", cfg);
+    cfg = config_l.get_string("gitflow.prefix.support").unwrap_or("".to_owned());
+    println!("Support branch prefix: {}", cfg);
+    cfg = config_l.get_string("gitflow.prefix.versiontag").unwrap_or("".to_owned());
+    println!("Version tag prefix: {}", cfg);
 }
 
 fn get_input(prompt: &str) -> String {
@@ -272,6 +295,10 @@ fn gf_run() {
             .about("git flow init")
             .arg(Arg::with_name("init_path")
                 .help("path to be initialized")))
+        // Config subcommand
+        .subcommand(SubCommand::with_name("config")
+            .about("git flow config")
+            )
         // Feature subcommand
         .subcommand(SubCommand::with_name("feature")
             .about("git flow feature")
@@ -326,6 +353,38 @@ fn gf_run() {
             .subcommand(SubCommand::with_name("list")
                 .about("hotfix list command"))
         )
+        .subcommand(SubCommand::with_name("bugfix")
+            .about("git flow bugfix")
+            .subcommand(SubCommand::with_name("start")
+                .about("bugfix start command")
+                .arg(Arg::with_name("bugfix_name")
+                    .help("work on a bugfix branch")
+                    .required(true)
+                    .index(1)))
+            .subcommand(SubCommand::with_name("finish")
+                .about("bugfix finish command")
+                .arg(Arg::with_name("bugfix_name")
+                    .help("work off a bugfix branch")
+                    .required(true)
+                    .index(1)))
+            .subcommand(SubCommand::with_name("list")
+                .about("bugfix list command"))
+        )
+        .subcommand(SubCommand::with_name("support")
+            .about("git flow support")
+            .subcommand(SubCommand::with_name("start")
+                .about("support start command")
+                .arg(Arg::with_name("bugfix_name")
+                    .help("work on a bugfix branch")
+                    .required(true)
+                    .index(1))
+                .arg(Arg::with_name("base_branch")
+                    .help("the based branch which a support starts from")
+                    .required(true)
+                    .index(2)))
+            .subcommand(SubCommand::with_name("list")
+                .about("bugfix list command"))
+        )
         // ...
         .get_matches();
 
@@ -344,6 +403,11 @@ fn gf_run() {
                 return;
             },
         }
+    }
+
+    // Config
+    if let Some(_matches) = matches.subcommand_matches("config") {
+        gf_config();
     }
 
     // Feature
@@ -424,6 +488,51 @@ fn gf_run() {
         }
         if let Some(_) = match_sub0.subcommand_matches("list") {
             list_gf_branch("hotfix");
+        }
+    }
+
+    // Bugfix
+    if let Some(match_sub0) = matches.subcommand_matches("bugfix") {
+        if let Some(match_sub1) = match_sub0.subcommand_matches("start") {
+            let br = match_sub1.value_of("bugfix_name").unwrap();
+            match gf_subcmd("bugfix", "start", "develop", br) {
+                Ok(()) => println!("Run bugfix {} successfully", br),
+                Err(_) => {
+                    println!("Run bugfix {} failed", br);
+                    return;
+                },
+            }
+        }
+        if let Some(match_sub1) = match_sub0.subcommand_matches("finish") {
+            let br = match_sub1.value_of("bugfix_name").unwrap();
+            match gf_subcmd("bugfix", "finish", "develop", br) {
+                Ok(()) => println!("Run bugfix {} successfully", br),
+                Err(_) => {
+                    println!("Run bugfix {} failed", br);
+                    return;
+                },
+            }
+        }
+        if let Some(_) = match_sub0.subcommand_matches("list") {
+            list_gf_branch("bugfix");
+        }
+    }
+
+    // Support
+    if let Some(match_sub0) = matches.subcommand_matches("support") {
+        if let Some(match_sub1) = match_sub0.subcommand_matches("start") {
+            let br = match_sub1.value_of("support_name").unwrap();
+            let base_br = match_sub1.value_of("base_branch").unwrap();
+            match gf_subcmd("support", "start", base_br, br) {
+                Ok(()) => println!("Run support {} successfully", br),
+                Err(_) => {
+                    println!("Run support {} failed", br);
+                    return;
+                },
+            }
+        }
+        if let Some(_) = match_sub0.subcommand_matches("list") {
+            list_gf_branch("support");
         }
     }
 }
