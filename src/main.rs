@@ -238,7 +238,13 @@ fn gf_subcmd(cmd: &str, subcmd: &str, base_br: &str, br: &str) -> Result<(), Err
 }
 
 fn list_gf_branch(gf_br: &str) {
-    let paths = Path::read_dir(Path::new(&(".git/refs/heads/".to_owned() + gf_br))).expect("No branches exist.");
+    let p = &(".git/refs/heads/".to_owned() + gf_br);
+    let gf_br_path = Path::new(p);
+    if !gf_br_path.exists() {
+        println!("No {} branches exist.", gf_br);
+        return;
+    }
+    let paths = Path::read_dir(gf_br_path).unwrap();
 
     let mut cur_br = String::new();
     let mut f = File::open(".git/HEAD").expect("Unable to open file");
@@ -258,9 +264,9 @@ fn list_gf_branch(gf_br: &str) {
 
 fn gf_run() {
     let matches = App::new("git-flow")
-        .version("0.2.0")
+        .version("0.2.2")
         .author("Jason Wang <wang_borong@163.com>")
-        .about("git flow")
+        .about("Workflow in git")
         // Init subcommand
         .subcommand(SubCommand::with_name("init")
             .about("git flow init")
@@ -333,7 +339,10 @@ fn gf_run() {
         }
         match gf_init(&path) {
             Ok(()) => println!("Init {} Successfully", path),
-            Err(e) => panic!("Init {} Failed ({})", path, e),
+            Err(_) => {
+                println!("Init {} failed", path);
+                return;
+            },
         }
     }
 
@@ -343,14 +352,20 @@ fn gf_run() {
             let br = match_sub1.value_of("feature_name").unwrap();
             match gf_subcmd("feature", "start", "develop", br) {
                 Ok(()) => println!("Run feature {} successfully", br),
-                Err(e) => panic!("Run subcmd feature failed {}", e),
+                Err(_) => {
+                    println!("Run feature {} failed", br);
+                    return;
+                },
             }
         }
         if let Some(match_sub1) = match_sub0.subcommand_matches("finish") {
             let br = match_sub1.value_of("feature_name").unwrap();
             match gf_subcmd("feature", "finish", "develop", br) {
                 Ok(()) => println!("Run feature {} successfully", br),
-                Err(e) => panic!("Run subcmd feature failed {}", e),
+                Err(_) => {
+                    println!("Run feature {} failed", br);
+                    return;
+                },
             }
         }
         if let Some(_) = match_sub0.subcommand_matches("list") {
@@ -364,14 +379,20 @@ fn gf_run() {
             let br = match_sub1.value_of("release_name").unwrap();
             match gf_subcmd("release", "start", "develop", br) {
                 Ok(()) => println!("Run release {} successfully", br),
-                Err(e) => panic!("Run subcmd release failed {}", e),
+                Err(_) => {
+                    println!("Run release {} failed", br);
+                    return;
+                },
             }
         }
         if let Some(match_sub1) = match_sub0.subcommand_matches("finish") {
             let br = match_sub1.value_of("release_name").unwrap();
             match gf_subcmd("release", "finish", "develop", br) {
                 Ok(()) => println!("Run release {} successfully", br),
-                Err(e) => panic!("Run subcmd release failed {}", e),
+                Err(_) => {
+                    println!("Run release {} failed", br);
+                    return;
+                },
             }
         }
         if let Some(_) = match_sub0.subcommand_matches("list") {
@@ -385,14 +406,20 @@ fn gf_run() {
             let br = match_sub1.value_of("hotfix_name").unwrap();
             match gf_subcmd("hotfix", "start", "develop", br) {
                 Ok(()) => println!("Run hotfix {} successfully", br),
-                Err(e) => panic!("Run subcmd hotfix failed {}", e),
+                Err(_) => {
+                    println!("Run hotfix {} failed", br);
+                    return;
+                },
             }
         }
         if let Some(match_sub1) = match_sub0.subcommand_matches("finish") {
             let br = match_sub1.value_of("hotfix_name").unwrap();
             match gf_subcmd("hotfix", "finish", "develop", br) {
                 Ok(()) => println!("Run hotfix {} successfully", br),
-                Err(e) => panic!("Run subcmd hotfix failed {}", e),
+                Err(_) => {
+                    println!("Run hotfix {} failed", br);
+                    return;
+                },
             }
         }
         if let Some(_) = match_sub0.subcommand_matches("list") {
