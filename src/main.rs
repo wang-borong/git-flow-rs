@@ -1,5 +1,6 @@
 extern crate clap;
 
+use std::str;
 use std::path::Path;
 use std::process::Command;
 use std::fs::{self, File};
@@ -7,6 +8,12 @@ use std::io::{self, Read, Write};
 use std::env;
 use git2::*;
 use clap::{Arg, App, SubCommand};
+
+const RESET: &str = "\u{1b}[m";
+const BOLD: &str = "\u{1b}[1m";
+const RED: &str = "\u{1b}[31m";
+const GREEN: &str = "\u{1b}[32m";
+const CYAN: &str = "\u{1b}[36m";
 
 fn create_initial_commit(repo: &Repository) -> Result<(), Error> {
     // First use the config to initialize a commit signature for the user.
@@ -42,6 +49,13 @@ fn checkout_branch(repo: &Repository, br_name: &str) -> Result<(), Error> {
     repo.set_head(&refs_tree)?;
 
     Ok(())
+}
+
+fn tree_to_treeish<'a>(repo: &'a Repository, br_name: &str)
+    -> Result<Option<Object<'a>>, Error> {
+    let obj = repo.revparse_single(&br_name)?;
+    let tree = obj.peel(ObjectType::Tree)?;
+        Ok(Some(tree))
 }
 
 fn create_checkout_branch(repo: &Repository, br_name: &str, base_br: Option<&str>, oid_str: Option<&str>) -> Result<(), Error> {
@@ -260,7 +274,7 @@ fn gf_subcmd(cmd: &str, subcmd: &str, base_br: &str, br: &str) -> Result<(), Err
     Ok(())
 }
 
-fn list_gf_branch(gf_br: &str) {
+fn gf_list_branch(gf_br: &str) {
     let p = &(".git/refs/heads/".to_owned() + gf_br);
     let gf_br_path = Path::new(p);
     if !gf_br_path.exists() {
@@ -283,6 +297,55 @@ fn list_gf_branch(gf_br: &str) {
             println!("  {}", br);
         }
     }
+}
+
+fn gf_diff_branches(old: &str, new: Option<&str>) {
+    let repo = Repository::open(".").expect("Not a git repository");
+    let newtree: Object;
+    let oldtree = tree_to_treeish(&repo, old)
+        .expect("Get old tree failed")
+        .unwrap();
+    if new == None {
+        let headref = repo.head().expect("Get head reference failed");
+        let headname = headref.name().unwrap();
+        newtree = tree_to_treeish(&repo, headname)
+            .expect("Get old tree failed")
+            .unwrap();
+    } else {
+        newtree = tree_to_treeish(&repo, new.unwrap())
+            .expect("Get old tree failed")
+            .unwrap();
+    }
+
+    let diff = repo.diff_tree_to_tree(Some(oldtree.as_tree().unwrap()), Some(newtree.as_tree().unwrap()), None)
+        .expect("Get diff failed");
+
+    let mut last_color = None;
+    diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
+        let next = match line.origin() {
+            '+' => Some(GREEN),
+            '-' => Some(RED),
+            '>' => Some(GREEN),
+            '<' => Some(RED),
+            'F' => Some(BOLD),
+            'H' => Some(CYAN),
+            _ => None,
+        };
+        if next != last_color {
+            if last_color == Some(BOLD) || next == Some(BOLD) {
+                print!("{}", RESET);
+            }
+            print!("{}", next.unwrap_or(RESET));
+            last_color = next;
+        }
+
+        match line.origin() {
+            '+' | '-' | ' ' => print!("{}", line.origin()),
+            _ => {}
+        }
+        print!("{}", str::from_utf8(line.content()).unwrap());
+        true
+    }).expect("Print diffs failed");
 }
 
 fn gf_run() {
@@ -449,6 +512,7 @@ fn gf_run() {
 
     // Feature
     if let Some(match_sub0) = matches.subcommand_matches("feature") {
+        // start
         if let Some(match_sub1) = match_sub0.subcommand_matches("start") {
             let br = match_sub1.value_of("feature_name").unwrap();
             match gf_subcmd("feature", "start", "develop", br) {
@@ -459,6 +523,7 @@ fn gf_run() {
                 },
             }
         }
+        // finish
         if let Some(match_sub1) = match_sub0.subcommand_matches("finish") {
             let br = match_sub1.value_of("feature_name").unwrap();
             match gf_subcmd("feature", "finish", "develop", br) {
@@ -469,8 +534,44 @@ fn gf_run() {
                 },
             }
         }
+        // list
         if let Some(_) = match_sub0.subcommand_matches("list") {
-            list_gf_branch("feature");
+            gf_list_branch("feature");
+        }
+        // diff
+        if let Some(match_sub1) = match_sub0.subcommand_matches("diff") {
+            let tmp_br: &str;
+            if match_sub1.is_present("feature_name") {
+                tmp_br = match_sub1.value_of("feature_name").unwrap();
+                gf_diff_branches("develop", Some(&("feature/".to_owned() + tmp_br)));
+            } else {
+                gf_diff_branches("develop", None);
+            }
+        }
+        // checkout
+        if let Some(match_sub1) = match_sub0.subcommand_matches("checkout") {
+            let br = match_sub1.value_of("feature_name").unwrap();
+            let br_name = &("feature/".to_owned() + br);
+            let repo = Repository::open(".").expect("Not a git repository");
+            match checkout_branch(&repo, br_name) {
+                Ok(()) => println!("Checkout to {} successfully", br_name),
+                Err(_) => {
+                    println!("Checkout to {} failed", br_name);
+                    return;
+                },
+            }
+        }
+        if let Some(match_sub1) = match_sub0.subcommand_matches("delete") {
+            let br = match_sub1.value_of("feature_name").unwrap();
+            let br_name = &("feature/".to_owned() + br);
+            let repo = Repository::open(".").expect("Not a git repository");
+            match delete_branch(&repo, br_name) {
+                Ok(()) => println!("Delete {} successfully", br_name),
+                Err(_) => {
+                    println!("Delete {} failed", br_name);
+                    return;
+                },
+            }
         }
     }
 
@@ -497,7 +598,7 @@ fn gf_run() {
             }
         }
         if let Some(_) = match_sub0.subcommand_matches("list") {
-            list_gf_branch("release");
+            gf_list_branch("release");
         }
     }
 
@@ -524,7 +625,7 @@ fn gf_run() {
             }
         }
         if let Some(_) = match_sub0.subcommand_matches("list") {
-            list_gf_branch("hotfix");
+            gf_list_branch("hotfix");
         }
     }
 
@@ -551,7 +652,7 @@ fn gf_run() {
             }
         }
         if let Some(_) = match_sub0.subcommand_matches("list") {
-            list_gf_branch("bugfix");
+            gf_list_branch("bugfix");
         }
     }
 
@@ -569,7 +670,7 @@ fn gf_run() {
             }
         }
         if let Some(_) = match_sub0.subcommand_matches("list") {
-            list_gf_branch("support");
+            gf_list_branch("support");
         }
     }
 }
