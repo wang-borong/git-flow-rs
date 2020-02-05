@@ -1,5 +1,6 @@
 extern crate clap;
 
+use std::str;
 use std::path::Path;
 use std::process::Command;
 use std::fs::{self, File};
@@ -7,6 +8,12 @@ use std::io::{self, Read, Write};
 use std::env;
 use git2::*;
 use clap::{Arg, App, SubCommand};
+
+const RESET: &str = "\u{1b}[m";
+const BOLD: &str = "\u{1b}[1m";
+const RED: &str = "\u{1b}[31m";
+const GREEN: &str = "\u{1b}[32m";
+const CYAN: &str = "\u{1b}[36m";
 
 fn create_initial_commit(repo: &Repository) -> Result<(), Error> {
     // First use the config to initialize a commit signature for the user.
@@ -42,6 +49,13 @@ fn checkout_branch(repo: &Repository, br_name: &str) -> Result<(), Error> {
     repo.set_head(&refs_tree)?;
 
     Ok(())
+}
+
+fn tree_to_treeish<'a>(repo: &'a Repository, br_name: &str)
+    -> Result<Option<Object<'a>>, Error> {
+    let obj = repo.revparse_single(&br_name)?;
+    let tree = obj.peel(ObjectType::Tree)?;
+        Ok(Some(tree))
 }
 
 fn create_checkout_branch(repo: &Repository, br_name: &str, base_br: Option<&str>, oid_str: Option<&str>) -> Result<(), Error> {
@@ -153,10 +167,33 @@ fn gf_init<P: AsRef<Path>>(path: P) -> Result<(), Error> {
     config_l.set_str("gitflow.prefix.feature", "feature/")?;
     config_l.set_str("gitflow.prefix.release", "release/")?;
     config_l.set_str("gitflow.prefix.hotfix", "hotfix/")?;
+    config_l.set_str("gitflow.prefix.bugfix", "bugfix/")?;
     config_l.set_str("gitflow.prefix.support", "support/")?;
     config_l.set_str("gitflow.prefix.versiontag", "")?;
 
     Ok(())
+}
+
+fn gf_config() {
+    let repo = Repository::init(".").expect("Not a git-flow repository");
+    let config_l = repo.config().expect("Can not get local cofniguration");
+
+    let mut cfg = config_l.get_string("gitflow.branch.master").unwrap_or("".to_owned());
+    println!("Branch name for production releases: {}", cfg);
+    cfg = config_l.get_string("gitflow.branch.develop").unwrap_or("".to_owned());
+    println!("Branch name for \"next release\" development: {}", cfg);
+    cfg = config_l.get_string("gitflow.prefix.feature").unwrap_or("".to_owned());
+    println!("Feature branch prefix: {}", cfg);
+    cfg = config_l.get_string("gitflow.prefix.bugfix").unwrap_or("".to_owned());
+    println!("Bugfix branch prefix: {}", cfg);
+    cfg = config_l.get_string("gitflow.prefix.release").unwrap_or("".to_owned());
+    println!("Release branch prefix: {}", cfg);
+    cfg = config_l.get_string("gitflow.prefix.hotfix").unwrap_or("".to_owned());
+    println!("Hotfix branch prefix: {}", cfg);
+    cfg = config_l.get_string("gitflow.prefix.support").unwrap_or("".to_owned());
+    println!("Support branch prefix: {}", cfg);
+    cfg = config_l.get_string("gitflow.prefix.versiontag").unwrap_or("".to_owned());
+    println!("Version tag prefix: {}", cfg);
 }
 
 fn get_input(prompt: &str) -> String {
@@ -237,7 +274,7 @@ fn gf_subcmd(cmd: &str, subcmd: &str, base_br: &str, br: &str) -> Result<(), Err
     Ok(())
 }
 
-fn list_gf_branch(gf_br: &str) {
+fn gf_list_branch(gf_br: &str) {
     let p = &(".git/refs/heads/".to_owned() + gf_br);
     let gf_br_path = Path::new(p);
     if !gf_br_path.exists() {
@@ -262,33 +299,279 @@ fn list_gf_branch(gf_br: &str) {
     }
 }
 
+fn gf_diff_branches(old: &str, new: Option<&str>) {
+    let repo = Repository::open(".").expect("Not a git repository");
+    let newtree: Object;
+    let oldtree = tree_to_treeish(&repo, old)
+        .expect("Get old tree failed")
+        .unwrap();
+    if new == None {
+        let headref = repo.head().expect("Get head reference failed");
+        let headname = headref.name().unwrap();
+        newtree = tree_to_treeish(&repo, headname)
+            .expect("Get old tree failed")
+            .unwrap();
+    } else {
+        newtree = tree_to_treeish(&repo, new.unwrap())
+            .expect("Get old tree failed")
+            .unwrap();
+    }
+
+    let diff = repo.diff_tree_to_tree(Some(oldtree.as_tree().unwrap()), Some(newtree.as_tree().unwrap()), None)
+        .expect("Get diff failed");
+
+    let mut last_color = None;
+    diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
+        let next = match line.origin() {
+            '+' => Some(GREEN),
+            '-' => Some(RED),
+            '>' => Some(GREEN),
+            '<' => Some(RED),
+            'F' => Some(BOLD),
+            'H' => Some(CYAN),
+            _ => None,
+        };
+        if next != last_color {
+            if last_color == Some(BOLD) || next == Some(BOLD) {
+                print!("{}", RESET);
+            }
+            print!("{}", next.unwrap_or(RESET));
+            last_color = next;
+        }
+
+        match line.origin() {
+            '+' | '-' | ' ' => print!("{}", line.origin()),
+            _ => {}
+        }
+        print!("{}", str::from_utf8(line.content()).unwrap());
+        true
+    }).expect("Print diffs failed");
+}
+
+fn gf_publish(br_name: Option<&str>) {
+    let repo = Repository::open(".").expect("Not a git repository");
+    let headref = repo.head().expect("Get head reference failed");
+    let headname = headref.name().unwrap().to_owned().replace("refs/heads/", "");
+    let br = br_name.unwrap_or(headname.as_str());
+
+    Command::new("git")
+        .arg("push")
+        .arg("origin")
+        .arg(br)
+        .spawn()
+        .expect("Git push failed")
+        .wait()
+        .expect("Failed to run git push");
+    /*
+    let repo = Repository::open(".").expect("Not a git repository");
+    let remote = "origin";
+    let mut cb = RemoteCallbacks::new();
+    let mut remote = repo
+        .find_remote(remote)
+        .or_else(|_| repo.remote_anonymous(remote))
+        .expect("Can not find remote");
+
+    let mut pushstr = String::from("+refs/heads/master:refs/remotes/origin/master");
+    if let Some(br_name) = br_name {
+        pushstr = pushstr.replace("{sub}", br_name);
+    } else {
+        let headref = repo.head().expect("Get head reference failed");
+        let headname = headref.name().unwrap();
+        pushstr = pushstr.replace("{sub}", headname);
+    }
+    cb.credentials(|url, username, cred_type| {
+        let cred = Cred::userpass_plaintext("wbrn", "wbr19920116");
+        cred
+    });
+    let mut po = PushOptions::new();
+    po.remote_callbacks(cb);
+    remote.push(&[&pushstr], Some(&mut po)).expect("Push branch failed");
+
+    remote.disconnect();
+    */
+}
+
+fn gf_track(br_name: &str) -> Result<(), Error> {
+    let repo = Repository::open(".").expect("Not a git repository");
+    let remote = "origin";
+    let mut cb = RemoteCallbacks::new();
+    let mut remote = repo
+        .find_remote(remote)
+        .or_else(|_| repo.remote_anonymous(remote))?;
+    cb.sideband_progress(|data| {
+        print!("remote: {}", str::from_utf8(data).unwrap());
+        io::stdout().flush().unwrap();
+        true
+    });
+
+    // This callback gets called for each remote-tracking branch that gets
+    // updated. The message we output depends on whether it's a new one or an
+    // update.
+    cb.update_tips(|refname, a, b| {
+        if a.is_zero() {
+            println!("[new]     {:20} {}", b, refname);
+        } else {
+            println!("[updated] {:10}..{:10} {}", a, b, refname);
+        }
+        true
+    });
+
+    // Here we show processed and total objects in the pack and the amount of
+    // received data. Most frontends will probably want to show a percentage and
+    // the download rate.
+    cb.transfer_progress(|stats| {
+        if stats.received_objects() == stats.total_objects() {
+            print!(
+                "Resolving deltas {}/{}\r",
+                stats.indexed_deltas(),
+                stats.total_deltas()
+            );
+        } else if stats.total_objects() > 0 {
+            print!(
+                "Received {}/{} objects ({}) in {} bytes\r",
+                stats.received_objects(),
+                stats.total_objects(),
+                stats.indexed_objects(),
+                stats.received_bytes()
+            );
+        }
+        io::stdout().flush().unwrap();
+        true
+    });
+
+    // Download the packfile and index it. This function updates the amount of
+    // received data and the indexer stats which lets you inform the user about
+    // progress.
+    let mut fo = FetchOptions::new();
+    fo.remote_callbacks(cb);
+    remote.download(&[] as &[&str], Some(&mut fo))?;
+
+    {
+        // If there are local objects (we got a thin pack), then tell the user
+        // how many objects we saved from having to cross the network.
+        let stats = remote.stats();
+        if stats.local_objects() > 0 {
+            println!(
+                "\rReceived {}/{} objects in {} bytes (used {} local \
+                 objects)",
+                stats.indexed_objects(),
+                stats.total_objects(),
+                stats.received_bytes(),
+                stats.local_objects()
+            );
+        } else {
+            println!(
+                "\rReceived {}/{} objects in {} bytes",
+                stats.indexed_objects(),
+                stats.total_objects(),
+                stats.received_bytes()
+            );
+        }
+    }
+
+    // Disconnect the underlying connection to prevent from idling.
+    remote.disconnect();
+
+    // Update the references in the remote's namespace to point to the right
+    // commits. This may be needed even if there was no packfile to download,
+    // which can happen e.g. when the branches have been changed but all the
+    // needed objects are available locally.
+    remote.update_tips(None, true, AutotagOption::Unspecified, None)?;
+
+    checkout_branch(&repo, br_name)?;
+
+    Ok(())
+}
+
+fn gf_rebase(cmd: &str, br_name: Option<&str>, opt: Option<&str>) {
+    // git rebase develop [--interactive|--rebase-merges]
+
+    let repo = Repository::open(".").expect("Not a git repository");
+    if let Some(br_name) = br_name {
+        let br = &(cmd.to_owned() + "/" + br_name);
+        checkout_branch(&repo, br).expect("Checkout branch failed");
+    }
+
+    let mut git_cmd = Command::new("git");
+    git_cmd.arg("rebase").arg("develop");
+    if let Some(opt) = opt {
+        git_cmd.arg(opt);
+    }
+    git_cmd
+    .spawn()
+    .expect("Git push failed")
+    .wait()
+    .expect("Failed to run git push");
+}
+
 fn gf_run() {
     let matches = App::new("git-flow")
-        .version("0.2.2")
+        .version("0.3.0")
         .author("Jason Wang <wang_borong@163.com>")
         .about("Workflow in git")
         // Init subcommand
         .subcommand(SubCommand::with_name("init")
-            .about("git flow init")
+            .about("Setup a git repository for git flow usage.")
             .arg(Arg::with_name("init_path")
-                .help("path to be initialized")))
+                .help("Path to be initialized")))
+        // Config subcommand
+        .subcommand(SubCommand::with_name("config")
+            .about("Show the git-flow configurations")
+            )
         // Feature subcommand
         .subcommand(SubCommand::with_name("feature")
-            .about("git flow feature")
+            .about("Manage your feature branches.")
             .subcommand(SubCommand::with_name("start")
-                .about("feature start command")
+                .about("Start new feature branch.")
                 .arg(Arg::with_name("feature_name")
-                    .help("work on a feature branch")
+                    .help("The new feature to be started")
                     .required(true)
                     .index(1)))
             .subcommand(SubCommand::with_name("finish")
-                .about("feature finish command")
+                .about("Finish feature branch")
                 .arg(Arg::with_name("feature_name")
-                    .help("work off a feature branch")
+                    .help("The feature to be finished")
                     .required(true)
                     .index(1)))
             .subcommand(SubCommand::with_name("list")
-                .about("feature list command"))
+                .about("Lists all the existing feature branches in the local repository"))
+            .subcommand(SubCommand::with_name("publish")
+                .about("Publish feature branch on origin.")
+                .arg(Arg::with_name("feature_name")
+                    .help("The feature to be published")))
+            .subcommand(SubCommand::with_name("track")
+                .about("Start tracking feature that is shared on origin")
+                .arg(Arg::with_name("feature_name")
+                    .help("The feature branch to be tracked")
+                    .required(true)
+                    .index(1)))
+            .subcommand(SubCommand::with_name("diff")
+                .about("Show all changes in feature branch that are not in the base branch.")
+                .arg(Arg::with_name("feature_name")
+                    .help("The feature to be checked")))
+            .subcommand(SubCommand::with_name("rebase")
+                .about("Rebase feature on develop")
+                .arg(Arg::with_name("interactive")
+                    .short("i")
+                    .help("Do an interactive rebase"))
+                .arg(Arg::with_name("rebase-merges")
+                    .short("r")
+                    .help("Preserve merges"))
+                .arg(Arg::with_name("feature_name")
+                    .help("The feature branch to be rebased")
+                    .index(1)))
+            .subcommand(SubCommand::with_name("checkout")
+                .about("Switch to feature branch")
+                .arg(Arg::with_name("feature_name")
+                    .help("The feature name to be checked out")
+                    .required(true)
+                    .index(1)))
+            .subcommand(SubCommand::with_name("delete")
+                .about("Delete a given feature branch")
+                .arg(Arg::with_name("feature_name")
+                    .help("The feature branch to be deleted")
+                    .required(true)
+                    .index(1)))
         )
         // Release subcommand
         .subcommand(SubCommand::with_name("release")
@@ -326,17 +609,44 @@ fn gf_run() {
             .subcommand(SubCommand::with_name("list")
                 .about("hotfix list command"))
         )
+        .subcommand(SubCommand::with_name("bugfix")
+            .about("git flow bugfix")
+            .subcommand(SubCommand::with_name("start")
+                .about("bugfix start command")
+                .arg(Arg::with_name("bugfix_name")
+                    .help("work on a bugfix branch")
+                    .required(true)
+                    .index(1)))
+            .subcommand(SubCommand::with_name("finish")
+                .about("bugfix finish command")
+                .arg(Arg::with_name("bugfix_name")
+                    .help("work off a bugfix branch")
+                    .required(true)
+                    .index(1)))
+            .subcommand(SubCommand::with_name("list")
+                .about("bugfix list command"))
+        )
+        .subcommand(SubCommand::with_name("support")
+            .about("git flow support")
+            .subcommand(SubCommand::with_name("start")
+                .about("support start command")
+                .arg(Arg::with_name("bugfix_name")
+                    .help("work on a bugfix branch")
+                    .required(true)
+                    .index(1))
+                .arg(Arg::with_name("base_branch")
+                    .help("the based branch which a support starts from")
+                    .required(true)
+                    .index(2)))
+            .subcommand(SubCommand::with_name("list")
+                .about("bugfix list command"))
+        )
         // ...
         .get_matches();
 
     // Init
     if let Some(matches) = matches.subcommand_matches("init") {
-        let path: &str;
-        if matches.is_present("init_path") {
-            path = matches.value_of("init_path").unwrap();
-        } else {
-            path = ".";
-        }
+        let path = matches.value_of("init_path").unwrap_or(".");
         match gf_init(&path) {
             Ok(()) => println!("Init {} Successfully", path),
             Err(_) => {
@@ -346,18 +656,25 @@ fn gf_run() {
         }
     }
 
+    // Config
+    if let Some(_matches) = matches.subcommand_matches("config") {
+        gf_config();
+    }
+
     // Feature
     if let Some(match_sub0) = matches.subcommand_matches("feature") {
+        // start
         if let Some(match_sub1) = match_sub0.subcommand_matches("start") {
             let br = match_sub1.value_of("feature_name").unwrap();
             match gf_subcmd("feature", "start", "develop", br) {
-                Ok(()) => println!("Run feature {} successfully", br),
+                Ok(()) => println!("Start feature {} successfully", br),
                 Err(_) => {
-                    println!("Run feature {} failed", br);
+                    println!("Start feature {} failed", br);
                     return;
                 },
             }
         }
+        // finish
         if let Some(match_sub1) = match_sub0.subcommand_matches("finish") {
             let br = match_sub1.value_of("feature_name").unwrap();
             match gf_subcmd("feature", "finish", "develop", br) {
@@ -368,8 +685,72 @@ fn gf_run() {
                 },
             }
         }
+        // list
         if let Some(_) = match_sub0.subcommand_matches("list") {
-            list_gf_branch("feature");
+            gf_list_branch("feature");
+        }
+        // publish
+        if let Some(match_sub1) = match_sub0.subcommand_matches("publish") {
+            if match_sub1.is_present("feature_name") {
+                let tmp_br = match_sub1.value_of("feature_name").unwrap();
+                gf_publish(Some(&("feature/".to_owned() + tmp_br)));
+            } else {
+                gf_publish(None);
+            }
+        }
+        // track
+        if let Some(match_sub1) = match_sub0.subcommand_matches("track") {
+            let br_name = match_sub1.value_of("feature_name")
+                .expect("No feature name input");
+            gf_track(&("feature/".to_owned() + br_name))
+                .expect("Fetch remote failed");
+        }
+        // diff
+        if let Some(match_sub1) = match_sub0.subcommand_matches("diff") {
+            if match_sub1.is_present("feature_name") {
+                let tmp_br = match_sub1.value_of("feature_name").unwrap();
+                gf_diff_branches("develop", Some(&("feature/".to_owned() + tmp_br)));
+            } else {
+                gf_diff_branches("develop", None);
+            }
+        }
+        // rebase
+        if let Some(match_sub1) = match_sub0.subcommand_matches("rebase") {
+            let mut opt = None;
+            if match_sub1.is_present("interactive") {
+                opt = Some("--interactive");
+            } else if match_sub1.is_present("rebase-merges") {
+                opt = Some("--rebase-merges");
+            }
+
+            let br_name = match_sub1.value_of("feature_name");
+            gf_rebase(match_sub0.subcommand_name().unwrap(), br_name, opt);
+        }
+        // checkout
+        if let Some(match_sub1) = match_sub0.subcommand_matches("checkout") {
+            let br = match_sub1.value_of("feature_name").unwrap();
+            let br_name = &("feature/".to_owned() + br);
+            let repo = Repository::open(".").expect("Not a git repository");
+            match checkout_branch(&repo, br_name) {
+                Ok(()) => println!("Checkout to {} successfully", br_name),
+                Err(_) => {
+                    println!("Checkout to {} failed", br_name);
+                    return;
+                },
+            }
+        }
+        //delete
+        if let Some(match_sub1) = match_sub0.subcommand_matches("delete") {
+            let br = match_sub1.value_of("feature_name").unwrap();
+            let br_name = &("feature/".to_owned() + br);
+            let repo = Repository::open(".").expect("Not a git repository");
+            match delete_branch(&repo, br_name) {
+                Ok(()) => println!("Delete {} successfully", br_name),
+                Err(_) => {
+                    println!("Delete {} failed", br_name);
+                    return;
+                },
+            }
         }
     }
 
@@ -396,7 +777,7 @@ fn gf_run() {
             }
         }
         if let Some(_) = match_sub0.subcommand_matches("list") {
-            list_gf_branch("release");
+            gf_list_branch("release");
         }
     }
 
@@ -423,7 +804,52 @@ fn gf_run() {
             }
         }
         if let Some(_) = match_sub0.subcommand_matches("list") {
-            list_gf_branch("hotfix");
+            gf_list_branch("hotfix");
+        }
+    }
+
+    // Bugfix
+    if let Some(match_sub0) = matches.subcommand_matches("bugfix") {
+        if let Some(match_sub1) = match_sub0.subcommand_matches("start") {
+            let br = match_sub1.value_of("bugfix_name").unwrap();
+            match gf_subcmd("bugfix", "start", "develop", br) {
+                Ok(()) => println!("Run bugfix {} successfully", br),
+                Err(_) => {
+                    println!("Run bugfix {} failed", br);
+                    return;
+                },
+            }
+        }
+        if let Some(match_sub1) = match_sub0.subcommand_matches("finish") {
+            let br = match_sub1.value_of("bugfix_name").unwrap();
+            match gf_subcmd("bugfix", "finish", "develop", br) {
+                Ok(()) => println!("Run bugfix {} successfully", br),
+                Err(_) => {
+                    println!("Run bugfix {} failed", br);
+                    return;
+                },
+            }
+        }
+        if let Some(_) = match_sub0.subcommand_matches("list") {
+            gf_list_branch("bugfix");
+        }
+    }
+
+    // Support
+    if let Some(match_sub0) = matches.subcommand_matches("support") {
+        if let Some(match_sub1) = match_sub0.subcommand_matches("start") {
+            let br = match_sub1.value_of("support_name").unwrap();
+            let base_br = match_sub1.value_of("base_branch").unwrap();
+            match gf_subcmd("support", "start", base_br, br) {
+                Ok(()) => println!("Run support {} successfully", br),
+                Err(_) => {
+                    println!("Run support {} failed", br);
+                    return;
+                },
+            }
+        }
+        if let Some(_) = match_sub0.subcommand_matches("list") {
+            gf_list_branch("support");
         }
     }
 }
