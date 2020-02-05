@@ -373,6 +373,25 @@ fn gf_publish(br_name: Option<&str>, user: &str, pass: &str) {
     remote.push(&[&br], Some(&mut options)).unwrap();
 }
 
+fn gf_track(br_name: &str) {
+    Command::new("git")
+        .arg("fetch")
+        .arg("origin")
+        .arg(br_name)
+        .spawn()
+        .expect("Git fetech failed")
+        .wait()
+        .expect("Failed to run git fetch");
+    Command::new("git")
+        .arg("checkout")
+        .arg(br_name)
+        .spawn()
+        .expect("Git checkout failed")
+        .wait()
+        .expect("Failed to run git checkout");
+}
+
+/*
 fn gf_track(br_name: &str) -> Result<(), Error> {
     let repo = Repository::open(".").expect("Not a git repository");
     let remote = "origin";
@@ -464,6 +483,7 @@ fn gf_track(br_name: &str) -> Result<(), Error> {
 
     Ok(())
 }
+*/
 
 fn gf_rebase(cmd: &str, br_name: Option<&str>, opt: Option<&str>) {
     // git rebase develop [--interactive|--rebase-merges]
@@ -583,6 +603,22 @@ fn gf_run() {
                     .index(1)))
             .subcommand(SubCommand::with_name("list")
                 .about("release list command"))
+            .subcommand(SubCommand::with_name("publish")
+                .about("Publish release branch on origin.")
+                .arg(Arg::with_name("release_name")
+                    .help("The release to be published")))
+            .subcommand(SubCommand::with_name("track")
+                .about("Start tracking release that is shared on origin")
+                .arg(Arg::with_name("release_name")
+                    .help("The release branch to be tracked")
+                    .required(true)
+                    .index(1)))
+            .subcommand(SubCommand::with_name("delete")
+                .about("Delete a given release branch")
+                .arg(Arg::with_name("release_name")
+                    .help("The release branch to be deleted")
+                    .required(true)
+                    .index(1)))
         )
         // Hotfix subcommand
         .subcommand(SubCommand::with_name("hotfix")
@@ -601,6 +637,16 @@ fn gf_run() {
                     .index(1)))
             .subcommand(SubCommand::with_name("list")
                 .about("hotfix list command"))
+            .subcommand(SubCommand::with_name("publish")
+                .about("Publish feature branch on origin.")
+                .arg(Arg::with_name("feature_name")
+                    .help("The feature to be published")))
+            .subcommand(SubCommand::with_name("delete")
+                .about("Delete a given feature branch")
+                .arg(Arg::with_name("feature_name")
+                    .help("The feature branch to be deleted")
+                    .required(true)
+                    .index(1)))
         )
         .subcommand(SubCommand::with_name("bugfix")
             .about("git flow bugfix")
@@ -618,6 +664,43 @@ fn gf_run() {
                     .index(1)))
             .subcommand(SubCommand::with_name("list")
                 .about("bugfix list command"))
+            .subcommand(SubCommand::with_name("publish")
+                .about("Publish bugfix branch on origin.")
+                .arg(Arg::with_name("bugfix_name")
+                    .help("The bugfix to be published")))
+            .subcommand(SubCommand::with_name("track")
+                .about("Start tracking bugfix that is shared on origin")
+                .arg(Arg::with_name("bugfix_name")
+                    .help("The bugfix branch to be tracked")
+                    .required(true)
+                    .index(1)))
+            .subcommand(SubCommand::with_name("diff")
+                .about("Show all changes in bugfix branch that are not in the base branch.")
+                .arg(Arg::with_name("bugfix_name")
+                    .help("The bugfix to be checked")))
+            .subcommand(SubCommand::with_name("rebase")
+                .about("Rebase bugfix on develop")
+                .arg(Arg::with_name("interactive")
+                    .short("i")
+                    .help("Do an interactive rebase"))
+                .arg(Arg::with_name("rebase-merges")
+                    .short("r")
+                    .help("Preserve merges"))
+                .arg(Arg::with_name("bugfix_name")
+                    .help("The bugfix branch to be rebased")
+                    .index(1)))
+            .subcommand(SubCommand::with_name("checkout")
+                .about("Switch to bugfix branch")
+                .arg(Arg::with_name("bugfix_name")
+                    .help("The bugfix name to be checked out")
+                    .required(true)
+                    .index(1)))
+            .subcommand(SubCommand::with_name("delete")
+                .about("Delete a given bugfix branch")
+                .arg(Arg::with_name("bugfix_name")
+                    .help("The bugfix branch to be deleted")
+                    .required(true)
+                    .index(1)))
         )
         .subcommand(SubCommand::with_name("support")
             .about("git flow support")
@@ -700,8 +783,7 @@ fn gf_run() {
         if let Some(match_sub1) = match_sub0.subcommand_matches("track") {
             let br_name = match_sub1.value_of("feature_name")
                 .expect("No feature name input");
-            gf_track(&("feature/".to_owned() + br_name))
-                .expect("Fetch remote failed");
+            gf_track(&("feature/".to_owned() + br_name));
         }
         // diff
         if let Some(match_sub1) = match_sub0.subcommand_matches("diff") {
@@ -777,6 +859,34 @@ fn gf_run() {
         if let Some(_) = match_sub0.subcommand_matches("list") {
             gf_list_branch("release");
         }
+        // publish
+        if let Some(match_sub1) = match_sub0.subcommand_matches("publish") {
+            if match_sub1.is_present("release_name") {
+                let tmp_br = match_sub1.value_of("release_name").unwrap();
+                gf_publish(Some(&("release/".to_owned() + tmp_br)));
+            } else {
+                gf_publish(None);
+            }
+        }
+        // track
+        if let Some(match_sub1) = match_sub0.subcommand_matches("track") {
+            let br_name = match_sub1.value_of("release_name")
+                .expect("No release name input");
+            gf_track(&("release/".to_owned() + br_name));
+        }
+        //delete
+        if let Some(match_sub1) = match_sub0.subcommand_matches("delete") {
+            let br = match_sub1.value_of("release_name").unwrap();
+            let br_name = &("release/".to_owned() + br);
+            let repo = Repository::open(".").expect("Not a git repository");
+            match delete_branch(&repo, br_name) {
+                Ok(()) => println!("Delete {} successfully", br_name),
+                Err(_) => {
+                    println!("Delete {} failed", br_name);
+                    return;
+                },
+            }
+        }
     }
 
     // Hotfix
@@ -804,6 +914,28 @@ fn gf_run() {
         if let Some(_) = match_sub0.subcommand_matches("list") {
             gf_list_branch("hotfix");
         }
+        // publish
+        if let Some(match_sub1) = match_sub0.subcommand_matches("publish") {
+            if match_sub1.is_present("hotfix_name") {
+                let tmp_br = match_sub1.value_of("hotfix_name").unwrap();
+                gf_publish(Some(&("hotfix/".to_owned() + tmp_br)));
+            } else {
+                gf_publish(None);
+            }
+        }
+        //delete
+        if let Some(match_sub1) = match_sub0.subcommand_matches("delete") {
+            let br = match_sub1.value_of("hotfix_name").unwrap();
+            let br_name = &("hotfix/".to_owned() + br);
+            let repo = Repository::open(".").expect("Not a git repository");
+            match delete_branch(&repo, br_name) {
+                Ok(()) => println!("Delete {} successfully", br_name),
+                Err(_) => {
+                    println!("Delete {} failed", br_name);
+                    return;
+                },
+            }
+        }
     }
 
     // Bugfix
@@ -830,6 +962,68 @@ fn gf_run() {
         }
         if let Some(_) = match_sub0.subcommand_matches("list") {
             gf_list_branch("bugfix");
+        }
+        // publish
+        if let Some(match_sub1) = match_sub0.subcommand_matches("publish") {
+            if match_sub1.is_present("bugfix_name") {
+                let tmp_br = match_sub1.value_of("bugfix_name").unwrap();
+                gf_publish(Some(&("bugfix/".to_owned() + tmp_br)));
+            } else {
+                gf_publish(None);
+            }
+        }
+        // track
+        if let Some(match_sub1) = match_sub0.subcommand_matches("track") {
+            let br_name = match_sub1.value_of("bugfix_name")
+                .expect("No bugfix name input");
+            gf_track(&("bugfix/".to_owned() + br_name));
+        }
+        // diff
+        if let Some(match_sub1) = match_sub0.subcommand_matches("diff") {
+            if match_sub1.is_present("bugfix_name") {
+                let tmp_br = match_sub1.value_of("bugfix_name").unwrap();
+                gf_diff_branches("develop", Some(&("bugfix/".to_owned() + tmp_br)));
+            } else {
+                gf_diff_branches("develop", None);
+            }
+        }
+        // rebase
+        if let Some(match_sub1) = match_sub0.subcommand_matches("rebase") {
+            let mut opt = None;
+            if match_sub1.is_present("interactive") {
+                opt = Some("--interactive");
+            } else if match_sub1.is_present("rebase-merges") {
+                opt = Some("--rebase-merges");
+            }
+
+            let br_name = match_sub1.value_of("bugfix_name");
+            gf_rebase(match_sub0.subcommand_name().unwrap(), br_name, opt);
+        }
+        // checkout
+        if let Some(match_sub1) = match_sub0.subcommand_matches("checkout") {
+            let br = match_sub1.value_of("bugfix_name").unwrap();
+            let br_name = &("bugfix/".to_owned() + br);
+            let repo = Repository::open(".").expect("Not a git repository");
+            match checkout_branch(&repo, br_name) {
+                Ok(()) => println!("Checkout to {} successfully", br_name),
+                Err(_) => {
+                    println!("Checkout to {} failed", br_name);
+                    return;
+                },
+            }
+        }
+        //delete
+        if let Some(match_sub1) = match_sub0.subcommand_matches("delete") {
+            let br = match_sub1.value_of("bugfix_name").unwrap();
+            let br_name = &("bugfix/".to_owned() + br);
+            let repo = Repository::open(".").expect("Not a git repository");
+            match delete_branch(&repo, br_name) {
+                Ok(()) => println!("Delete {} successfully", br_name),
+                Err(_) => {
+                    println!("Delete {} failed", br_name);
+                    return;
+                },
+            }
         }
     }
 
