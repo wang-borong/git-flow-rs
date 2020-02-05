@@ -506,7 +506,7 @@ fn gf_rebase(cmd: &str, br_name: Option<&str>, opt: Option<&str>) {
 
 fn gf_run() {
     let matches = App::new("git-flow")
-        .version("0.2.2")
+        .version("0.3.0")
         .author("Jason Wang <wang_borong@163.com>")
         .about("Workflow in git")
         // Init subcommand
