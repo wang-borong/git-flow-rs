@@ -485,7 +485,7 @@ fn gf_track(br_name: &str) -> Result<(), Error> {
 }
 */
 
-fn gf_rebase(cmd: &str, br_name: Option<&str>, opt: Option<&str>) {
+fn gf_rebase(cmd: &str, br_name: Option<&str>, _opt: Option<&str>) {
     // git rebase develop [--interactive|--rebase-merges]
 
     let repo = Repository::open(".").expect("Not a git repository");
@@ -497,7 +497,7 @@ fn gf_rebase(cmd: &str, br_name: Option<&str>, opt: Option<&str>) {
     if let Some(br_name) = br_name {
         let mut opts: RebaseOptions<'_> = Default::default();
 
-        let bn = &("refs/heads/feature/".to_owned() + br_name);
+        let bn = &("refs/heads/".to_owned() + cmd + "/" + br_name);
 
         let head = repo.find_reference(bn).unwrap();
         let branch = repo.reference_to_annotated_commit(&head).unwrap();
@@ -769,7 +769,7 @@ fn gf_run() {
         if let Some(match_sub1) = match_sub0.subcommand_matches("publish") {
             if match_sub1.is_present("feature_name") {
                 let tmp_br = match_sub1.value_of("feature_name").unwrap();
-                print!("User: ");
+                print!("Username: ");
                 let _ = stdout().flush();
                 let mut user = String::new();
                 stdin().read_line(&mut user).expect("Get user failed");
@@ -863,9 +863,14 @@ fn gf_run() {
         if let Some(match_sub1) = match_sub0.subcommand_matches("publish") {
             if match_sub1.is_present("release_name") {
                 let tmp_br = match_sub1.value_of("release_name").unwrap();
-                gf_publish(Some(&("release/".to_owned() + tmp_br)));
+                print!("Username: ");
+                let _ = stdout().flush();
+                let mut user = String::new();
+                stdin().read_line(&mut user).expect("Get user failed");
+                let pass = rpassword::read_password_from_tty(Some("Password: ")).unwrap();
+                gf_publish(Some(&("release/".to_owned() + tmp_br)), &user, &pass);
             } else {
-                gf_publish(None);
+                gf_publish(None, "", "");
             }
         }
         // track
@@ -918,9 +923,14 @@ fn gf_run() {
         if let Some(match_sub1) = match_sub0.subcommand_matches("publish") {
             if match_sub1.is_present("hotfix_name") {
                 let tmp_br = match_sub1.value_of("hotfix_name").unwrap();
-                gf_publish(Some(&("hotfix/".to_owned() + tmp_br)));
+                print!("Username: ");
+                let _ = stdout().flush();
+                let mut user = String::new();
+                stdin().read_line(&mut user).expect("Get user failed");
+                let pass = rpassword::read_password_from_tty(Some("Password: ")).unwrap();
+                gf_publish(Some(&("hotfix/".to_owned() + tmp_br)), &user, &pass);
             } else {
-                gf_publish(None);
+                gf_publish(None, "", "");
             }
         }
         //delete
@@ -967,9 +977,14 @@ fn gf_run() {
         if let Some(match_sub1) = match_sub0.subcommand_matches("publish") {
             if match_sub1.is_present("bugfix_name") {
                 let tmp_br = match_sub1.value_of("bugfix_name").unwrap();
-                gf_publish(Some(&("bugfix/".to_owned() + tmp_br)));
+                print!("Username: ");
+                let _ = stdout().flush();
+                let mut user = String::new();
+                stdin().read_line(&mut user).expect("Get user failed");
+                let pass = rpassword::read_password_from_tty(Some("Password: ")).unwrap();
+                gf_publish(Some(&("bugfix/".to_owned() + tmp_br)), &user, &pass);
             } else {
-                gf_publish(None);
+                gf_publish(None, "", "");
             }
         }
         // track
