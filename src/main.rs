@@ -483,6 +483,27 @@ fn gf_track(br_name: &str) -> Result<(), Error> {
     Ok(())
 }
 
+fn gf_rebase(cmd: &str, br_name: Option<&str>, opt: Option<&str>) {
+    // git rebase develop [--interactive|--rebase-merges]
+
+    let repo = Repository::open(".").expect("Not a git repository");
+    if let Some(br_name) = br_name {
+        let br = &(cmd.to_owned() + "/" + br_name);
+        checkout_branch(&repo, br).expect("Checkout branch failed");
+    }
+
+    let mut git_cmd = Command::new("git");
+    git_cmd.arg("rebase").arg("develop");
+    if let Some(opt) = opt {
+        git_cmd.arg(opt);
+    }
+    git_cmd
+    .spawn()
+    .expect("Git push failed")
+    .wait()
+    .expect("Failed to run git push");
+}
+
 fn gf_run() {
     let matches = App::new("git-flow")
         .version("0.2.2")
@@ -533,8 +554,8 @@ fn gf_run() {
                 .arg(Arg::with_name("interactive")
                     .short("i")
                     .help("Do an interactive rebase"))
-                .arg(Arg::with_name("preserve-merges")
-                    .short("p")
+                .arg(Arg::with_name("rebase-merges")
+                    .short("r")
                     .help("Preserve merges"))
                 .arg(Arg::with_name("feature_name")
                     .help("The feature branch to be rebased")
@@ -695,14 +716,15 @@ fn gf_run() {
         }
         // rebase
         if let Some(match_sub1) = match_sub0.subcommand_matches("rebase") {
+            let mut opt = None;
             if match_sub1.is_present("interactive") {
-                println!("interactive");
-            } else if match_sub1.is_present("preserve-merges") {
-                println!("preserve-merges");
-            } else {
-                let br_name = match_sub1.value_of("feature_name").unwrap_or("");
-                println!("br_name: {}", br_name);
+                opt = Some("--interactive");
+            } else if match_sub1.is_present("rebase-merges") {
+                opt = Some("--rebase-merges");
             }
+
+            let br_name = match_sub1.value_of("feature_name");
+            gf_rebase(match_sub0.subcommand_name().unwrap(), br_name, opt);
         }
         // checkout
         if let Some(match_sub1) = match_sub0.subcommand_matches("checkout") {
