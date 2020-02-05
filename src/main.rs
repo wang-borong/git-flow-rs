@@ -348,6 +348,141 @@ fn gf_diff_branches(old: &str, new: Option<&str>) {
     }).expect("Print diffs failed");
 }
 
+fn gf_publish(br_name: Option<&str>) {
+    let repo = Repository::open(".").expect("Not a git repository");
+    let headref = repo.head().expect("Get head reference failed");
+    let headname = headref.name().unwrap().to_owned().replace("refs/heads/", "");
+    let br = br_name.unwrap_or(headname.as_str());
+
+    Command::new("git")
+        .arg("push")
+        .arg("origin")
+        .arg(br)
+        .spawn()
+        .expect("Git push failed")
+        .wait()
+        .expect("Failed to run git push");
+    /*
+    let repo = Repository::open(".").expect("Not a git repository");
+    let remote = "origin";
+    let mut cb = RemoteCallbacks::new();
+    let mut remote = repo
+        .find_remote(remote)
+        .or_else(|_| repo.remote_anonymous(remote))
+        .expect("Can not find remote");
+
+    let mut pushstr = String::from("+refs/heads/master:refs/remotes/origin/master");
+    if let Some(br_name) = br_name {
+        pushstr = pushstr.replace("{sub}", br_name);
+    } else {
+        let headref = repo.head().expect("Get head reference failed");
+        let headname = headref.name().unwrap();
+        pushstr = pushstr.replace("{sub}", headname);
+    }
+    cb.credentials(|url, username, cred_type| {
+        let cred = Cred::userpass_plaintext("wbrn", "wbr19920116");
+        cred
+    });
+    let mut po = PushOptions::new();
+    po.remote_callbacks(cb);
+    remote.push(&[&pushstr], Some(&mut po)).expect("Push branch failed");
+
+    remote.disconnect();
+    */
+}
+
+fn gf_track(br_name: &str) -> Result<(), Error> {
+    let repo = Repository::open(".").expect("Not a git repository");
+    let remote = "origin";
+    let mut cb = RemoteCallbacks::new();
+    let mut remote = repo
+        .find_remote(remote)
+        .or_else(|_| repo.remote_anonymous(remote))?;
+    cb.sideband_progress(|data| {
+        print!("remote: {}", str::from_utf8(data).unwrap());
+        io::stdout().flush().unwrap();
+        true
+    });
+
+    // This callback gets called for each remote-tracking branch that gets
+    // updated. The message we output depends on whether it's a new one or an
+    // update.
+    cb.update_tips(|refname, a, b| {
+        if a.is_zero() {
+            println!("[new]     {:20} {}", b, refname);
+        } else {
+            println!("[updated] {:10}..{:10} {}", a, b, refname);
+        }
+        true
+    });
+
+    // Here we show processed and total objects in the pack and the amount of
+    // received data. Most frontends will probably want to show a percentage and
+    // the download rate.
+    cb.transfer_progress(|stats| {
+        if stats.received_objects() == stats.total_objects() {
+            print!(
+                "Resolving deltas {}/{}\r",
+                stats.indexed_deltas(),
+                stats.total_deltas()
+            );
+        } else if stats.total_objects() > 0 {
+            print!(
+                "Received {}/{} objects ({}) in {} bytes\r",
+                stats.received_objects(),
+                stats.total_objects(),
+                stats.indexed_objects(),
+                stats.received_bytes()
+            );
+        }
+        io::stdout().flush().unwrap();
+        true
+    });
+
+    // Download the packfile and index it. This function updates the amount of
+    // received data and the indexer stats which lets you inform the user about
+    // progress.
+    let mut fo = FetchOptions::new();
+    fo.remote_callbacks(cb);
+    remote.download(&[] as &[&str], Some(&mut fo))?;
+
+    {
+        // If there are local objects (we got a thin pack), then tell the user
+        // how many objects we saved from having to cross the network.
+        let stats = remote.stats();
+        if stats.local_objects() > 0 {
+            println!(
+                "\rReceived {}/{} objects in {} bytes (used {} local \
+                 objects)",
+                stats.indexed_objects(),
+                stats.total_objects(),
+                stats.received_bytes(),
+                stats.local_objects()
+            );
+        } else {
+            println!(
+                "\rReceived {}/{} objects in {} bytes",
+                stats.indexed_objects(),
+                stats.total_objects(),
+                stats.received_bytes()
+            );
+        }
+    }
+
+    // Disconnect the underlying connection to prevent from idling.
+    remote.disconnect();
+
+    // Update the references in the remote's namespace to point to the right
+    // commits. This may be needed even if there was no packfile to download,
+    // which can happen e.g. when the branches have been changed but all the
+    // needed objects are available locally.
+    remote.update_tips(None, true, AutotagOption::Unspecified, None)?;
+
+    checkout_branch(&repo, br_name)?;
+
+    Ok(())
+}
+
 fn gf_run() {
     let matches = App::new("git-flow")
         .version("0.2.2")
@@ -511,9 +646,9 @@ fn gf_run() {
         if let Some(match_sub1) = match_sub0.subcommand_matches("start") {
             let br = match_sub1.value_of("feature_name").unwrap();
             match gf_subcmd("feature", "start", "develop", br) {
-                Ok(()) => println!("Run feature {} successfully", br),
+                Ok(()) => println!("Start feature {} successfully", br),
                 Err(_) => {
-                    println!("Run feature {} failed", br);
+                    println!("Start feature {} failed", br);
                     return;
                 },
             }
@@ -543,10 +678,11 @@ fn gf_run() {
             }
         }
         // track
-        if let Some(match_sub1) = match_sub0.subcommand_matches("diff") {
+        if let Some(match_sub1) = match_sub0.subcommand_matches("track") {
             let br_name = match_sub1.value_of("feature_name")
                 .expect("No feature name input");
-            gf_fetch(Some(&("feature/".to_owned() + br_name)));
+            gf_track(&("feature/".to_owned() + br_name))
+                .expect("Fetch remote failed");
         }
         // diff
         if let Some(match_sub1) = match_sub0.subcommand_matches("diff") {
