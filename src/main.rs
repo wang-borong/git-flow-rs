@@ -362,33 +362,6 @@ fn gf_publish(br_name: Option<&str>) {
         .expect("Git push failed")
         .wait()
         .expect("Failed to run git push");
-    /*
-    let repo = Repository::open(".").expect("Not a git repository");
-    let remote = "origin";
-    let mut cb = RemoteCallbacks::new();
-    let mut remote = repo
-        .find_remote(remote)
-        .or_else(|_| repo.remote_anonymous(remote))
-        .expect("Can not find remote");
-
-    let mut pushstr = String::from("+refs/heads/master:refs/remotes/origin/master");
-    if let Some(br_name) = br_name {
-        pushstr = pushstr.replace("{sub}", br_name);
-    } else {
-        let headref = repo.head().expect("Get head reference failed");
-        let headname = headref.name().unwrap();
-        pushstr = pushstr.replace("{sub}", headname);
-    }
-    cb.credentials(|url, username, cred_type| {
-        let cred = Cred::userpass_plaintext("wbrn", "wbr19920116");
-        cred
-    });
-    let mut po = PushOptions::new();
-    po.remote_callbacks(cb);
-    remote.push(&[&pushstr], Some(&mut po)).expect("Push branch failed");
-
-    remote.disconnect();
-    */
 }
 
 fn gf_track(br_name: &str) {
