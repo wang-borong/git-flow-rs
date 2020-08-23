@@ -1,10 +1,12 @@
 extern crate clap;
+extern crate rpassword;
 
 use std::str;
+use std::string::String;
 use std::path::Path;
 use std::process::Command;
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{self, stdin, stdout, Read, Write};
 use std::env;
 use git2::*;
 use clap::{Arg, App, SubCommand};
@@ -348,47 +350,27 @@ fn gf_diff_branches(old: &str, new: Option<&str>) {
     }).expect("Print diffs failed");
 }
 
-fn gf_publish(br_name: Option<&str>) {
+fn gf_publish(br_name: Option<&str>, user: &str, pass: &str) {
+    // Urgly, TODO get remote name from repository?
+    let remote_name = "origin";
+    //let remote_branch = br_name.unwrap_or("master");
     let repo = Repository::open(".").expect("Not a git repository");
-    let headref = repo.head().expect("Get head reference failed");
-    let headname = headref.name().unwrap().to_owned().replace("refs/heads/", "");
-    let br = br_name.unwrap_or(headname.as_str());
+    let mut remote = repo.find_remote(remote_name).expect("Find remote name failed");
 
-    Command::new("git")
-        .arg("push")
-        .arg("origin")
-        .arg(br)
-        .spawn()
-        .expect("Git push failed")
-        .wait()
-        .expect("Failed to run git push");
-    /*
-    let repo = Repository::open(".").expect("Not a git repository");
-    let remote = "origin";
-    let mut cb = RemoteCallbacks::new();
-    let mut remote = repo
-        .find_remote(remote)
-        .or_else(|_| repo.remote_anonymous(remote))
-        .expect("Can not find remote");
+    let mut callbacks = RemoteCallbacks::new();
+    /* Push */
+    let mut options = PushOptions::new();
 
-    let mut pushstr = String::from("+refs/heads/master:refs/remotes/origin/master");
-    if let Some(br_name) = br_name {
-        pushstr = pushstr.replace("{sub}", br_name);
-    } else {
-        let headref = repo.head().expect("Get head reference failed");
-        let headname = headref.name().unwrap();
-        pushstr = pushstr.replace("{sub}", headname);
-    }
-    cb.credentials(|url, username, cred_type| {
-        let cred = Cred::userpass_plaintext("wbrn", "wbr19920116");
-        cred
+    callbacks.credentials(|_url, _username_from_url, _allowed_types| {
+        Cred::userpass_plaintext(user, pass)
     });
-    let mut po = PushOptions::new();
-    po.remote_callbacks(cb);
-    remote.push(&[&pushstr], Some(&mut po)).expect("Push branch failed");
-
-    remote.disconnect();
-    */
+    //callbacks.push_update_reference(|refname, status| {
+    //    Ok(())
+    //});
+    options.remote_callbacks(callbacks);
+    // push the specified branch
+    let br = "refs/heads/".to_owned() + br_name.unwrap_or("master");
+    remote.push(&[&br], Some(&mut options)).unwrap();
 }
 
 fn gf_track(br_name: &str) -> Result<(), Error> {
@@ -487,21 +469,32 @@ fn gf_rebase(cmd: &str, br_name: Option<&str>, opt: Option<&str>) {
     // git rebase develop [--interactive|--rebase-merges]
 
     let repo = Repository::open(".").expect("Not a git repository");
-    if let Some(br_name) = br_name {
-        let br = &(cmd.to_owned() + "/" + br_name);
-        checkout_branch(&repo, br).expect("Checkout branch failed");
-    }
 
-    let mut git_cmd = Command::new("git");
-    git_cmd.arg("rebase").arg("develop");
-    if let Some(opt) = opt {
-        git_cmd.arg(opt);
+    let head_target = repo.head().unwrap().target().unwrap();
+    let tip = repo.find_commit(head_target).unwrap();
+    let sig = tip.author();
+
+    if let Some(br_name) = br_name {
+        let mut opts: RebaseOptions<'_> = Default::default();
+
+        let bn = &("refs/heads/feature/".to_owned() + br_name);
+
+        let head = repo.find_reference(bn).unwrap();
+        let branch = repo.reference_to_annotated_commit(&head).unwrap();
+        let develop = repo.find_reference("refs/heads/develop").unwrap();
+        let upstream = repo.reference_to_annotated_commit(&develop).unwrap();
+        let mut rebase = repo
+            .rebase(Some(&branch), Some(&upstream), None, Some(&mut opts))
+            .unwrap();
+
+        while rebase.len() > 0 {
+            rebase.next().unwrap().unwrap();
+            let id = rebase.commit(None, &sig, None).unwrap();
+            let commit = repo.find_commit(id).unwrap();
+            println!("commit.message {}", commit.message().unwrap());
+        }
+        rebase.finish(None).unwrap();
     }
-    git_cmd
-    .spawn()
-    .expect("Git push failed")
-    .wait()
-    .expect("Failed to run git push");
 }
 
 fn gf_run() {
@@ -693,9 +686,14 @@ fn gf_run() {
         if let Some(match_sub1) = match_sub0.subcommand_matches("publish") {
             if match_sub1.is_present("feature_name") {
                 let tmp_br = match_sub1.value_of("feature_name").unwrap();
-                gf_publish(Some(&("feature/".to_owned() + tmp_br)));
+                print!("User: ");
+                let _ = stdout().flush();
+                let mut user = String::new();
+                stdin().read_line(&mut user).expect("Get user failed");
+                let pass = rpassword::read_password_from_tty(Some("Password: ")).unwrap();
+                gf_publish(Some(&("feature/".to_owned() + tmp_br)), &user, &pass);
             } else {
-                gf_publish(None);
+                gf_publish(None, "", "");
             }
         }
         // track
