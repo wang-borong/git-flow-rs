@@ -507,11 +507,13 @@ fn gf_rebase(cmd: &str, br_name: Option<&str>, _opt: Option<&str>) {
             .rebase(Some(&branch), Some(&upstream), None, Some(&mut opts))
             .unwrap();
 
-        while rebase.len() > 0 {
-            rebase.next().unwrap().unwrap();
-            let id = rebase.commit(None, &sig, None).unwrap();
-            let commit = repo.find_commit(id).unwrap();
-            println!("commit.message {}", commit.message().unwrap());
+        let mut rebase_len = rebase.len();
+        while rebase_len > 0 {
+            match rebase.next().unwrap() {
+                Ok(_) => rebase.commit(None, &sig, None).unwrap(),
+                Err(_) => break,
+            };
+            rebase_len -= 1;
         }
         rebase.finish(None).unwrap();
     }
