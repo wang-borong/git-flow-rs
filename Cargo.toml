@@ -1,6 +1,6 @@
 [package]
 name = "git-flow"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Jason Wang <1724555125@qq.com>"]
 edition = "2018"
 
