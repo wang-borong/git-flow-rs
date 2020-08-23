@@ -925,6 +925,7 @@ fn gf_run() {
         if let Some(match_sub1) = match_sub0.subcommand_matches("publish") {
             if match_sub1.is_present("hotfix_name") {
                 let tmp_br = match_sub1.value_of("hotfix_name").unwrap();
+<<<<<<< HEAD
                 print!("Username: ");
                 let _ = stdout().flush();
                 let mut user = String::new();
@@ -979,6 +980,7 @@ fn gf_run() {
         if let Some(match_sub1) = match_sub0.subcommand_matches("publish") {
             if match_sub1.is_present("bugfix_name") {
                 let tmp_br = match_sub1.value_of("bugfix_name").unwrap();
+<<<<<<< HEAD
                 print!("Username: ");
                 let _ = stdout().flush();
                 let mut user = String::new();
