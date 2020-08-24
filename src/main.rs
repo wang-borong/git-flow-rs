@@ -17,6 +17,8 @@ const RED: &str = "\u{1b}[31m";
 const GREEN: &str = "\u{1b}[32m";
 const CYAN: &str = "\u{1b}[36m";
 
+// TODO 3. Reconstruct the codes
+
 fn create_initial_commit(repo: &Repository) -> Result<(), Error> {
     // First use the config to initialize a commit signature for the user.
     let sig = repo.signature()?;
@@ -425,6 +427,10 @@ fn gf_subcmd(cmd: &str, subcmd: &str, repo: &Repository,  base_br: &str, br: &st
     match subcmd {
         "start" => create_checkout_branch(&repo, &br_name, Some(&base_br), None)?,
         "finish" => {
+            /* XXX (urgent) there is bug here
+             * The merge status should be checked if it can be done as fastforward type,
+             * otherwise the merge branch will be truncated!!
+             */
             if cmd == "release" || cmd == "hotfix" {
                 ff = false;
                 merge_branch(&repo, "master", br_name, ff)?;
@@ -517,7 +523,7 @@ fn gf_diff_branches(old: &str, new: Option<&str>) {
 }
 
 fn gf_publish(br_name: Option<&str>, user: &str, pass: &str) {
-    // Urgly, TODO get remote name from repository?
+    // Urgly, TODO 2. get remote name from repository?
     let remote_name = "origin";
     //let remote_branch = br_name.unwrap_or("master");
     let repo = Repository::open(".").expect("Not a git repository");
@@ -527,6 +533,7 @@ fn gf_publish(br_name: Option<&str>, user: &str, pass: &str) {
     /* Push */
     let mut options = PushOptions::new();
 
+    // TODO 1. get userpass from configuration or in memory if it was there
     callbacks.credentials(|_url, _username_from_url, _allowed_types| {
         Cred::userpass_plaintext(user, pass)
     });
