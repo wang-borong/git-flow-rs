@@ -96,6 +96,173 @@ fn fastforward_merge_branch(repo: &Repository, our_br: &str, their_br: &str) -> 
     Ok(())
 }
 
+fn do_fetch<'a>(
+    repo: &'a git2::Repository,
+    refs: &[&str],
+    remote: &'a mut git2::Remote,
+) -> Result<git2::AnnotatedCommit<'a>, git2::Error> {
+    let mut cb = git2::RemoteCallbacks::new();
+
+    // Print out our transfer progress.
+    cb.transfer_progress(|stats| {
+        if stats.received_objects() == stats.total_objects() {
+            print!(
+                "Resolving deltas {}/{}\r",
+                stats.indexed_deltas(),
+                stats.total_deltas()
+            );
+        } else if stats.total_objects() > 0 {
+            print!(
+                "Received {}/{} objects ({}) in {} bytes\r",
+                stats.received_objects(),
+                stats.total_objects(),
+                stats.indexed_objects(),
+                stats.received_bytes()
+            );
+        }
+        io::stdout().flush().unwrap();
+        true
+    });
+
+    let mut fo = git2::FetchOptions::new();
+    fo.remote_callbacks(cb);
+    // Always fetch all tags.
+    // Perform a download and also update tips
+    fo.download_tags(git2::AutotagOption::All);
+    println!("Fetching {} for repo", remote.name().unwrap());
+    remote.fetch(refs, Some(&mut fo), None)?;
+
+    // If there are local objects (we got a thin pack), then tell the user
+    // how many objects we saved from having to cross the network.
+    let stats = remote.stats();
+    if stats.local_objects() > 0 {
+        println!(
+            "\rReceived {}/{} objects in {} bytes (used {} local \
+             objects)",
+            stats.indexed_objects(),
+            stats.total_objects(),
+            stats.received_bytes(),
+            stats.local_objects()
+        );
+    } else {
+        println!(
+            "\rReceived {}/{} objects in {} bytes",
+            stats.indexed_objects(),
+            stats.total_objects(),
+            stats.received_bytes()
+        );
+    }
+
+    let fetch_head = repo.find_reference("FETCH_HEAD")?;
+    Ok(repo.reference_to_annotated_commit(&fetch_head)?)
+}
+
+fn normal_merge(
+    repo: &Repository,
+    local: &git2::AnnotatedCommit,
+    remote: &git2::AnnotatedCommit,
+) -> Result<(), git2::Error> {
+    let local_tree = repo.find_commit(local.id())?.tree()?;
+    let remote_tree = repo.find_commit(remote.id())?.tree()?;
+    let ancestor = repo
+        .find_commit(repo.merge_base(local.id(), remote.id())?)?
+        .tree()?;
+    let mut idx = repo.merge_trees(&ancestor, &local_tree, &remote_tree, None)?;
+
+    if idx.has_conflicts() {
+        println!("Merge conficts detected...");
+        repo.checkout_index(Some(&mut idx), None)?;
+        return Ok(());
+    }
+    let result_tree = repo.find_tree(idx.write_tree_to(repo)?)?;
+    // now create the merge commit
+    let msg = format!("Merge: {} into {}", remote.id(), local.id());
+    let sig = repo.signature()?;
+    let local_commit = repo.find_commit(local.id())?;
+    let remote_commit = repo.find_commit(remote.id())?;
+    // Do our merge commit and set current branch head to that commit.
+    let _merge_commit = repo.commit(
+        Some("HEAD"),
+        &sig,
+        &sig,
+        &msg,
+        &result_tree,
+        &[&local_commit, &remote_commit],
+    )?;
+    // Set working tree to match head.
+    repo.checkout_head(None)?;
+    Ok(())
+}
+
+fn fast_forward(
+    repo: &Repository,
+    lb: &mut git2::Reference,
+    rc: &git2::AnnotatedCommit,
+) -> Result<(), git2::Error> {
+    let name = match lb.name() {
+        Some(s) => s.to_string(),
+        None => String::from_utf8_lossy(lb.name_bytes()).to_string(),
+    };
+    let msg = format!("Fast-Forward: Setting {} to id: {}", name, rc.id());
+    println!("{}", msg);
+    lb.set_target(rc.id(), &msg)?;
+    repo.set_head(&name)?;
+    repo.checkout_head(Some(
+        git2::build::CheckoutBuilder::default()
+            // For some reason the force is required to make the working directory actually get updated
+            // I suspect we should be adding some logic to handle dirty working directory states
+            // but this is just an example so maybe not.
+            .force(),
+    ))?;
+    Ok(())
+}
+
+fn do_merge<'a>(
+    repo: &'a Repository,
+    remote_branch: &str,
+    fetch_commit: git2::AnnotatedCommit<'a>,
+) -> Result<(), git2::Error> {
+    // 1. do a merge analysis
+    let analysis = repo.merge_analysis(&[&fetch_commit])?;
+
+    // 2. Do the appopriate merge
+    if analysis.0.is_fast_forward() {
+        println!("Doing a fast forward");
+        // do a fast forward
+        let refname = format!("refs/heads/{}", remote_branch);
+        match repo.find_reference(&refname) {
+            Ok(mut r) => {
+                fast_forward(repo, &mut r, &fetch_commit)?;
+            }
+            Err(_) => {
+                // The branch doesn't exist so just set the reference to the
+                // commit directly. Usually this is because you are pulling
+                // into an empty repository.
+                repo.reference(
+                    &refname,
+                    fetch_commit.id(),
+                    true,
+                    &format!("Setting {} to {}", remote_branch, fetch_commit.id()),
+                )?;
+                repo.set_head(&refname)?;
+                repo.checkout_head(Some(
+                    git2::build::CheckoutBuilder::default()
+                        .allow_conflicts(true)
+                        .conflict_style_merge(true)
+                        .force(),
+                ))?;
+            }
+        };
+    } else if analysis.0.is_normal() {
+        // do a normal merge
+        let head_commit = repo.reference_to_annotated_commit(&repo.head()?)?;
+        normal_merge(&repo, &head_commit, &fetch_commit)?;
+    } else {
+        println!("Nothing to do...");
+    }
+    Ok(())
+}
+
 fn normal_merge_branch(repo: &Repository, our_br: &str, their_br: &str) -> Result<(), Error> {
     let their_oid = repo.refname_to_id(&("refs/heads/".to_owned() + their_br))?;
     let their_commit = repo.find_commit(their_oid)?;
@@ -247,8 +414,7 @@ fn create_tag(repo: &Repository, br: &str) -> Result<Oid, Error> {
     Ok(tag_oid)
 }
 
-fn gf_subcmd(cmd: &str, subcmd: &str, base_br: &str, br: &str) -> Result<(), Error> {
-    let repo = Repository::open(".")?;
+fn gf_subcmd(cmd: &str, subcmd: &str, repo: &Repository,  base_br: &str, br: &str) -> Result<(), Error> {
     let config_l = repo.config()?;
 
     let prefix_conf = &("gitflow.prefix.".to_owned() + cmd);
@@ -374,118 +540,15 @@ fn gf_publish(br_name: Option<&str>, user: &str, pass: &str) {
 }
 
 fn gf_track(br_name: &str) {
-    Command::new("git")
-        .arg("fetch")
-        .arg("origin")
-        .arg(br_name)
-        .spawn()
-        .expect("Git fetech failed")
-        .wait()
-        .expect("Failed to run git fetch");
-    Command::new("git")
-        .arg("checkout")
-        .arg(br_name)
-        .spawn()
-        .expect("Git checkout failed")
-        .wait()
-        .expect("Failed to run git checkout");
-}
-
-/*
-fn gf_track(br_name: &str) -> Result<(), Error> {
+    let remote_name = "origin";
     let repo = Repository::open(".").expect("Not a git repository");
-    let remote = "origin";
-    let mut cb = RemoteCallbacks::new();
-    let mut remote = repo
-        .find_remote(remote)
-        .or_else(|_| repo.remote_anonymous(remote))?;
-    cb.sideband_progress(|data| {
-        print!("remote: {}", str::from_utf8(data).unwrap());
-        io::stdout().flush().unwrap();
-        true
-    });
+    let mut remote = repo.find_remote(remote_name).expect("Find remote name failed");
 
-    // This callback gets called for each remote-tracking branch that gets
-    // updated. The message we output depends on whether it's a new one or an
-    // update.
-    cb.update_tips(|refname, a, b| {
-        if a.is_zero() {
-            println!("[new]     {:20} {}", b, refname);
-        } else {
-            println!("[updated] {:10}..{:10} {}", a, b, refname);
-        }
-        true
-    });
-
-    // Here we show processed and total objects in the pack and the amount of
-    // received data. Most frontends will probably want to show a percentage and
-    // the download rate.
-    cb.transfer_progress(|stats| {
-        if stats.received_objects() == stats.total_objects() {
-            print!(
-                "Resolving deltas {}/{}\r",
-                stats.indexed_deltas(),
-                stats.total_deltas()
-            );
-        } else if stats.total_objects() > 0 {
-            print!(
-                "Received {}/{} objects ({}) in {} bytes\r",
-                stats.received_objects(),
-                stats.total_objects(),
-                stats.indexed_objects(),
-                stats.received_bytes()
-            );
-        }
-        io::stdout().flush().unwrap();
-        true
-    });
-
-    // Download the packfile and index it. This function updates the amount of
-    // received data and the indexer stats which lets you inform the user about
-    // progress.
-    let mut fo = FetchOptions::new();
-    fo.remote_callbacks(cb);
-    remote.download(&[] as &[&str], Some(&mut fo))?;
-
-    {
-        // If there are local objects (we got a thin pack), then tell the user
-        // how many objects we saved from having to cross the network.
-        let stats = remote.stats();
-        if stats.local_objects() > 0 {
-            println!(
-                "\rReceived {}/{} objects in {} bytes (used {} local \
-                 objects)",
-                stats.indexed_objects(),
-                stats.total_objects(),
-                stats.received_bytes(),
-                stats.local_objects()
-            );
-        } else {
-            println!(
-                "\rReceived {}/{} objects in {} bytes",
-                stats.indexed_objects(),
-                stats.total_objects(),
-                stats.received_bytes()
-            );
-        }
-    }
-
-    // Disconnect the underlying connection to prevent from idling.
-    remote.disconnect();
-
-    // Update the references in the remote's namespace to point to the right
-    // commits. This may be needed even if there was no packfile to download,
-    // which can happen e.g. when the branches have been changed but all the
-    // needed objects are available locally.
-    remote.update_tips(None, true, AutotagOption::Unspecified, None)?;
-
-    checkout_branch(&repo, br_name)?;
-
-    Ok(())
+    let fetch_commit = do_fetch(&repo, &[&br_name], &mut remote).expect("do_fetch failed");
+    do_merge(&repo, &br_name, fetch_commit).expect("do_merge failed");
 }
-*/
 
-fn gf_rebase(cmd: &str, br_name: Option<&str>, _opt: Option<&str>) {
+fn gf_rebase(br_name: Option<&str>, _opt: Option<&str>) {
     // git rebase develop [--interactive|--rebase-merges]
 
     let repo = Repository::open(".").expect("Not a git repository");
@@ -497,9 +560,8 @@ fn gf_rebase(cmd: &str, br_name: Option<&str>, _opt: Option<&str>) {
     if let Some(br_name) = br_name {
         let mut opts: RebaseOptions<'_> = Default::default();
 
-        let bn = &("refs/heads/".to_owned() + cmd + "/" + br_name);
-
-        let head = repo.find_reference(bn).unwrap();
+        let br_name = "refs/heads/".to_owned() + br_name;
+        let head = repo.find_reference(&br_name).unwrap();
         let branch = repo.reference_to_annotated_commit(&head).unwrap();
         let develop = repo.find_reference("refs/heads/develop").unwrap();
         let upstream = repo.reference_to_annotated_commit(&develop).unwrap();
@@ -744,7 +806,9 @@ fn gf_run() {
         // start
         if let Some(match_sub1) = match_sub0.subcommand_matches("start") {
             let br = match_sub1.value_of("feature_name").unwrap();
-            match gf_subcmd("feature", "start", "develop", br) {
+            let repo = Repository::open(".").expect("Can get repo");
+            checkout_branch(&repo, "develop").expect("checkout branch failed");
+            match gf_subcmd("feature", "start", &repo, "develop", br) {
                 Ok(()) => println!("Start feature {} successfully", br),
                 Err(_) => {
                     println!("Start feature {} failed", br);
@@ -755,7 +819,8 @@ fn gf_run() {
         // finish
         if let Some(match_sub1) = match_sub0.subcommand_matches("finish") {
             let br = match_sub1.value_of("feature_name").unwrap();
-            match gf_subcmd("feature", "finish", "develop", br) {
+            let repo = Repository::open(".").expect("Can get repo");
+            match gf_subcmd("feature", "finish", &repo, "develop", br) {
                 Ok(()) => println!("Run feature {} successfully", br),
                 Err(_) => {
                     println!("Run feature {} failed", br);
@@ -805,8 +870,8 @@ fn gf_run() {
                 opt = Some("--rebase-merges");
             }
 
-            let br_name = match_sub1.value_of("feature_name");
-            gf_rebase(match_sub0.subcommand_name().unwrap(), br_name, opt);
+            let br_name = "feature/".to_owned() + match_sub1.value_of("feature_name").unwrap();
+            gf_rebase(Some(&br_name), opt);
         }
         // checkout
         if let Some(match_sub1) = match_sub0.subcommand_matches("checkout") {
@@ -840,7 +905,9 @@ fn gf_run() {
     if let Some(match_sub0) = matches.subcommand_matches("release") {
         if let Some(match_sub1) = match_sub0.subcommand_matches("start") {
             let br = match_sub1.value_of("release_name").unwrap();
-            match gf_subcmd("release", "start", "develop", br) {
+            let repo = Repository::open(".").expect("Not a git repository");
+            checkout_branch(&repo, "develop").expect("checkout branch failed");
+            match gf_subcmd("release", "start", &repo, "develop", br) {
                 Ok(()) => println!("Run release {} successfully", br),
                 Err(_) => {
                     println!("Run release {} failed", br);
@@ -850,7 +917,8 @@ fn gf_run() {
         }
         if let Some(match_sub1) = match_sub0.subcommand_matches("finish") {
             let br = match_sub1.value_of("release_name").unwrap();
-            match gf_subcmd("release", "finish", "develop", br) {
+            let repo = Repository::open(".").expect("Not a git repository");
+            match gf_subcmd("release", "finish", &repo, "develop", br) {
                 Ok(()) => println!("Run release {} successfully", br),
                 Err(_) => {
                     println!("Run release {} failed", br);
@@ -865,10 +933,7 @@ fn gf_run() {
         if let Some(match_sub1) = match_sub0.subcommand_matches("publish") {
             if match_sub1.is_present("release_name") {
                 let tmp_br = match_sub1.value_of("release_name").unwrap();
-                print!("Username: ");
-                let _ = stdout().flush();
-                let mut user = String::new();
-                stdin().read_line(&mut user).expect("Get user failed");
+                let user = get_input("Username: ");
                 let pass = rpassword::read_password_from_tty(Some("Password: ")).unwrap();
                 gf_publish(Some(&("release/".to_owned() + tmp_br)), &user, &pass);
             } else {
@@ -900,7 +965,9 @@ fn gf_run() {
     if let Some(match_sub0) = matches.subcommand_matches("hotfix") {
         if let Some(match_sub1) = match_sub0.subcommand_matches("start") {
             let br = match_sub1.value_of("hotfix_name").unwrap();
-            match gf_subcmd("hotfix", "start", "develop", br) {
+            let repo = Repository::open(".").expect("Not a git repository");
+            checkout_branch(&repo, "develop").expect("checkout branch failed");
+            match gf_subcmd("hotfix", "start", &repo, "develop", br) {
                 Ok(()) => println!("Run hotfix {} successfully", br),
                 Err(_) => {
                     println!("Run hotfix {} failed", br);
@@ -910,7 +977,8 @@ fn gf_run() {
         }
         if let Some(match_sub1) = match_sub0.subcommand_matches("finish") {
             let br = match_sub1.value_of("hotfix_name").unwrap();
-            match gf_subcmd("hotfix", "finish", "develop", br) {
+            let repo = Repository::open(".").expect("Not a git repository");
+            match gf_subcmd("hotfix", "finish", &repo, "develop", br) {
                 Ok(()) => println!("Run hotfix {} successfully", br),
                 Err(_) => {
                     println!("Run hotfix {} failed", br);
@@ -925,11 +993,7 @@ fn gf_run() {
         if let Some(match_sub1) = match_sub0.subcommand_matches("publish") {
             if match_sub1.is_present("hotfix_name") {
                 let tmp_br = match_sub1.value_of("hotfix_name").unwrap();
-<<<<<<< HEAD
-                print!("Username: ");
-                let _ = stdout().flush();
-                let mut user = String::new();
-                stdin().read_line(&mut user).expect("Get user failed");
+                let user = get_input("Username: ");
                 let pass = rpassword::read_password_from_tty(Some("Password: ")).unwrap();
                 gf_publish(Some(&("hotfix/".to_owned() + tmp_br)), &user, &pass);
             } else {
@@ -955,7 +1019,9 @@ fn gf_run() {
     if let Some(match_sub0) = matches.subcommand_matches("bugfix") {
         if let Some(match_sub1) = match_sub0.subcommand_matches("start") {
             let br = match_sub1.value_of("bugfix_name").unwrap();
-            match gf_subcmd("bugfix", "start", "develop", br) {
+            let repo = Repository::open(".").expect("Not a git repository");
+            checkout_branch(&repo, "develop").expect("checkout branch failed");
+            match gf_subcmd("bugfix", "start", &repo, "develop", br) {
                 Ok(()) => println!("Run bugfix {} successfully", br),
                 Err(_) => {
                     println!("Run bugfix {} failed", br);
@@ -965,7 +1031,8 @@ fn gf_run() {
         }
         if let Some(match_sub1) = match_sub0.subcommand_matches("finish") {
             let br = match_sub1.value_of("bugfix_name").unwrap();
-            match gf_subcmd("bugfix", "finish", "develop", br) {
+            let repo = Repository::open(".").expect("Not a git repository");
+            match gf_subcmd("bugfix", "finish", &repo, "develop", br) {
                 Ok(()) => println!("Run bugfix {} successfully", br),
                 Err(_) => {
                     println!("Run bugfix {} failed", br);
@@ -980,11 +1047,7 @@ fn gf_run() {
         if let Some(match_sub1) = match_sub0.subcommand_matches("publish") {
             if match_sub1.is_present("bugfix_name") {
                 let tmp_br = match_sub1.value_of("bugfix_name").unwrap();
-<<<<<<< HEAD
-                print!("Username: ");
-                let _ = stdout().flush();
-                let mut user = String::new();
-                stdin().read_line(&mut user).expect("Get user failed");
+                let user = get_input("Username: ");
                 let pass = rpassword::read_password_from_tty(Some("Password: ")).unwrap();
                 gf_publish(Some(&("bugfix/".to_owned() + tmp_br)), &user, &pass);
             } else {
@@ -1015,8 +1078,8 @@ fn gf_run() {
                 opt = Some("--rebase-merges");
             }
 
-            let br_name = match_sub1.value_of("bugfix_name");
-            gf_rebase(match_sub0.subcommand_name().unwrap(), br_name, opt);
+            let br_name = "bugfix/".to_owned() + match_sub1.value_of("bugfix_name").unwrap();
+            gf_rebase(Some(&br_name), opt);
         }
         // checkout
         if let Some(match_sub1) = match_sub0.subcommand_matches("checkout") {
@@ -1051,7 +1114,9 @@ fn gf_run() {
         if let Some(match_sub1) = match_sub0.subcommand_matches("start") {
             let br = match_sub1.value_of("support_name").unwrap();
             let base_br = match_sub1.value_of("base_branch").unwrap();
-            match gf_subcmd("support", "start", base_br, br) {
+            let repo = Repository::open(".").expect("Not a git repository");
+            checkout_branch(&repo, base_br).expect("checkout branch failed");
+            match gf_subcmd("support", "start", &repo, base_br, br) {
                 Ok(()) => println!("Run support {} successfully", br),
                 Err(_) => {
                     println!("Run support {} failed", br);
