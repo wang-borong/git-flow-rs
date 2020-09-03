@@ -435,10 +435,8 @@ fn gf_subcmd(cmd: &str, subcmd: &str, repo: &Repository,  base_br: &str, br: &st
             repo.set_head(base_br_ref)?;
             let analysis = repo.merge_analysis(&[&br_commit])?;
             if analysis.0.is_fast_forward() {
-                println!("do the fast forward merging");
                 ff = true;
             } else {
-                println!("do the normal merging");
                 ff = false;
             }
 
