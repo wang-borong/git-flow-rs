@@ -426,7 +426,7 @@ fn gf_subcmd(cmd: &str, subcmd: &str, repo: &Repository,  base_br: &str, br: &st
     match subcmd {
         "start" => create_checkout_branch(&repo, &br_name, Some(&base_br), None)?,
         "finish" => {
-            let mut ff = true;
+            let mut ff;
             let refname = "refs/heads/".to_owned() + br_name;
             let brrf = repo.find_reference(&refname)?;
             let br_commit = repo.reference_to_annotated_commit(&brrf)?;
