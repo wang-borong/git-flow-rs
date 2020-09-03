@@ -423,14 +423,25 @@ fn gf_subcmd(cmd: &str, subcmd: &str, repo: &Repository,  base_br: &str, br: &st
     let prefix = config_l.get_string(prefix_conf)?;
     let br_name = &(prefix + br);
 
-    let mut ff = true;
     match subcmd {
         "start" => create_checkout_branch(&repo, &br_name, Some(&base_br), None)?,
         "finish" => {
-            /* XXX (urgent) there is bug here
-             * The merge status should be checked if it can be done as fastforward type,
-             * otherwise the merge branch will be truncated!!
-             */
+            let mut ff = true;
+            let refname = "refs/heads/".to_owned() + br_name;
+            let brrf = repo.find_reference(&refname)?;
+            let br_commit = repo.reference_to_annotated_commit(&brrf)?;
+            let base_br_ref = &("refs/heads/".to_owned() + base_br);
+            // set head to the base branch
+            repo.set_head(base_br_ref)?;
+            let analysis = repo.merge_analysis(&[&br_commit])?;
+            if analysis.0.is_fast_forward() {
+                println!("do the fast forward merging");
+                ff = true;
+            } else {
+                println!("do the normal merging");
+                ff = false;
+            }
+
             if cmd == "release" || cmd == "hotfix" {
                 ff = false;
                 merge_branch(&repo, "master", br_name, ff)?;
