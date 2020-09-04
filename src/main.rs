@@ -324,11 +324,16 @@ fn delete_branch(repo: &Repository, br_name: &str) -> Result<(), Error> {
 }
 
 fn gf_init<P: AsRef<Path>>(path: P) -> Result<(), Error> {
-    let repo = Repository::init(path)?;
-    let mut config_l = repo.config()?;
+    let repo;
+    if path.as_ref().join(".git").exists() == false {
+        repo = Repository::init(path).unwrap();
+        // create an initial commit for master branch
+        create_initial_commit(&repo).unwrap();
+    } else {
+        repo = Repository::open(path).expect("Not a git repository");
+    }
 
-    // create an initial commit for master branch
-    create_initial_commit(&repo)?;
+    let mut config_l = repo.config()?;
     config_l.set_str("gitflow.branch.master", "master")?;
 
     // git checkout -b develop master
